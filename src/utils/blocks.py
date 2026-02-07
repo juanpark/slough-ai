@@ -5,6 +5,43 @@ import json
 DISCLAIMER = "⚠️ AI가 생성한 응답이며, 오류가 있을 수 있습니다."
 HIGH_RISK_WARNING = "⚠️ [주의] 이 주제는 민감하므로, 직접 확인하시는 것을 권장합니다."
 
+MAX_BLOCK_TEXT = 2900  # Stay under Slack's 3000 char limit with margin
+
+
+def _split_text(text: str) -> list[str]:
+    """Split text into chunks that fit in a single Slack section block."""
+    if len(text) <= MAX_BLOCK_TEXT:
+        return [text]
+
+    chunks = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= MAX_BLOCK_TEXT:
+            chunks.append(remaining)
+            break
+        # Try to split on double newline (paragraph)
+        cut = remaining.rfind("\n\n", 0, MAX_BLOCK_TEXT)
+        if cut == -1:
+            # Try single newline
+            cut = remaining.rfind("\n", 0, MAX_BLOCK_TEXT)
+        if cut == -1:
+            # Try space
+            cut = remaining.rfind(" ", 0, MAX_BLOCK_TEXT)
+        if cut == -1:
+            # Hard cut
+            cut = MAX_BLOCK_TEXT
+        chunks.append(remaining[:cut])
+        remaining = remaining[cut:].lstrip("\n")
+    return chunks
+
+
+def _text_sections(text: str) -> list[dict]:
+    """Return one or more section blocks for a long text."""
+    return [
+        {"type": "section", "text": {"type": "mrkdwn", "text": chunk}}
+        for chunk in _split_text(text)
+    ]
+
 
 def build_answer_blocks(
     answer: str,
@@ -18,11 +55,8 @@ def build_answer_blocks(
     """
     blocks = []
 
-    # Answer text
-    blocks.append({
-        "type": "section",
-        "text": {"type": "mrkdwn", "text": answer},
-    })
+    # Answer text (chunked for Slack's 3000 char limit)
+    blocks.extend(_text_sections(answer))
 
     # High-risk warning (if applicable)
     if is_high_risk:
@@ -78,13 +112,7 @@ def build_review_request_blocks(
                 "text": f"*질문자:* <@{asker_id}>\n*질문:* {question}",
             },
         },
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"*AI 응답:*\n{answer}",
-            },
-        },
+        *_text_sections(f"*AI 응답:*\n{answer}"),
         {"type": "divider"},
         {
             "type": "actions",
@@ -156,9 +184,6 @@ def build_feedback_notification(
     ]
 
     if feedback_type == "corrected" and corrected_answer:
-        blocks.append({
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": f"*수정된 답변:*\n{corrected_answer}"},
-        })
+        blocks.extend(_text_sections(f"*수정된 답변:*\n{corrected_answer}"))
 
     return blocks
