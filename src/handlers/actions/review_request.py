@@ -35,16 +35,14 @@ def register(app):
         # Look up workspace for decision_maker_id
         with get_db() as db:
             workspace = get_workspace_by_team_id(db, team_id)
-
-        if workspace is None:
-            logger.error("Workspace not found for review request", extra={"team_id": team_id})
-            client.chat_postMessage(
-                channel=channel,
-                text="워크스페이스 설정이 완료되지 않았습니다.",
-            )
-            return
-
-        decision_maker_id = workspace.decision_maker_id
+            if workspace is None:
+                logger.error("Workspace not found for review request", extra={"team_id": team_id})
+                client.chat_postMessage(
+                    channel=channel,
+                    text="워크스페이스 설정이 완료되지 않았습니다.",
+                )
+                return
+            decision_maker_id = workspace.decision_maker_id
 
         # Try to get question and answer from the QA record in DB
         question = "(원본 질문을 불러올 수 없습니다)"

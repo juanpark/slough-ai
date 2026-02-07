@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     # App
     environment: str = "development"
     log_level: str = "DEBUG"
+    app_base_url: str = "http://localhost:3000"
+    app_port: int = 3000
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

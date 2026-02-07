@@ -14,12 +14,14 @@ def get_workspace_by_team_id(db: Session, team_id: str) -> Optional[Workspace]:
 
 
 def create_workspace(db: Session, *, slack_team_id: str, slack_team_name: str,
-                     decision_maker_id: str, bot_token: str, user_token: str) -> Workspace:
+                     admin_id: str, decision_maker_id: str, bot_token: str,
+                     user_token: str = "") -> Workspace:
     """Insert a new workspace row."""
     ws = Workspace(
         id=uuid.uuid4(),
         slack_team_id=slack_team_id,
         slack_team_name=slack_team_name,
+        admin_id=admin_id,
         decision_maker_id=decision_maker_id,
         bot_token=bot_token,
         user_token=user_token,

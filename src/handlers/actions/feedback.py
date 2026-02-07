@@ -7,10 +7,35 @@ import uuid as uuid_mod
 
 from src.services.ai import process_feedback
 from src.services.db import get_db
+from src.services.db.workspaces import get_workspace_by_team_id
 from src.services.db.qa_history import update_feedback
 from src.utils.blocks import build_feedback_notification
 
 logger = logging.getLogger(__name__)
+
+
+def _check_is_decision_maker(body, client) -> bool:
+    """Verify the user clicking is the decision-maker. Returns False and notifies if not."""
+    user_id = body["user"]["id"]
+    team_id = body.get("team", {}).get("id")
+
+    if not team_id:
+        return True  # Can't verify, allow
+
+    try:
+        with get_db() as db:
+            workspace = get_workspace_by_team_id(db, team_id)
+            if workspace and workspace.decision_maker_id != user_id:
+                client.chat_postEphemeral(
+                    channel=body["channel"]["id"],
+                    user=user_id,
+                    text="피드백은 의사결정자만 제출할 수 있습니다.",
+                )
+                return False
+    except Exception:
+        logger.exception("Failed to check decision-maker permission")
+
+    return True
 
 
 def register(app):
@@ -19,22 +44,26 @@ def register(app):
     @app.action("feedback_approved")
     def handle_approved(ack, body, client):
         ack()
-        _handle_feedback(body, client, "approved")
+        if _check_is_decision_maker(body, client):
+            _handle_feedback(body, client, "approved")
 
     @app.action("feedback_rejected")
     def handle_rejected(ack, body, client):
         ack()
-        _handle_feedback(body, client, "rejected")
+        if _check_is_decision_maker(body, client):
+            _handle_feedback(body, client, "rejected")
 
     @app.action("feedback_caution")
     def handle_caution(ack, body, client):
         ack()
-        _handle_feedback(body, client, "caution")
+        if _check_is_decision_maker(body, client):
+            _handle_feedback(body, client, "caution")
 
     @app.action("feedback_edit")
     def handle_edit(ack, body, client):
         ack()
-        _open_edit_modal(body, client)
+        if _check_is_decision_maker(body, client):
+            _open_edit_modal(body, client)
 
 
 def _handle_feedback(body: dict, client, feedback_type: str):
@@ -49,7 +78,7 @@ def _handle_feedback(body: dict, client, feedback_type: str):
 
     qa_id = payload.get("qa_id", "")
     asker_id = payload.get("asker_id", "")
-    workspace_id = body.get("team", {}).get("id", "stub-workspace")
+    team_id = body.get("team", {}).get("id", "")
 
     # Persist feedback to DB
     try:
@@ -59,14 +88,17 @@ def _handle_feedback(body: dict, client, feedback_type: str):
     except (ValueError, Exception):
         logger.warning("Could not update feedback in DB", extra={"qa_id": qa_id})
 
-    # Call AI feedback stub
-    asyncio.run(
-        process_feedback(
-            workspace_id=workspace_id,
-            question_id=qa_id,
-            feedback_type=feedback_type,
+    # Call AI feedback pipeline
+    try:
+        asyncio.run(
+            process_feedback(
+                workspace_id=team_id,
+                question_id=qa_id,
+                feedback_type=feedback_type,
+            )
         )
-    )
+    except Exception:
+        logger.exception("AI process_feedback failed", extra={"qa_id": qa_id})
 
     # Update the decision-maker's message to show feedback was given
     channel = body["channel"]["id"]

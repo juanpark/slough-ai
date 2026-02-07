@@ -9,47 +9,59 @@ from src.services.db.rules import get_active_rules, create_rule, delete_rule
 
 logger = logging.getLogger(__name__)
 
+FALLBACK_RESPONSE = "일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+
 
 def register(app):
     """Register the /rule command handler on the Bolt app."""
 
-    @app.command("/rule")
-    def handle_rule_command(ack, command, say):
+    @app.command("/slough-rule")
+    def handle_rule_command(ack, command, respond):
         ack()
 
         raw_text = (command.get("text") or "").strip()
         team_id = command.get("team_id", "")
+        user_id = command.get("user_id", "")
 
         # Look up workspace
-        with get_db() as db:
-            workspace = get_workspace_by_team_id(db, team_id)
-
-        if workspace is None:
-            say("워크스페이스 설정이 완료되지 않았습니다.")
+        try:
+            with get_db() as db:
+                workspace = get_workspace_by_team_id(db, team_id)
+                if workspace is None:
+                    respond("워크스페이스 설정이 완료되지 않았습니다.")
+                    return
+                admin_id = workspace.admin_id
+                workspace_id = workspace.id
+        except Exception:
+            logger.exception("DB error during workspace lookup for /rule")
+            respond(FALLBACK_RESPONSE)
             return
 
-        workspace_id = workspace.id
+        # Only the app admin can manage rules
+        if admin_id != user_id:
+            respond("이 명령어는 앱 관리자만 사용할 수 있습니다.")
+            return
 
         if not raw_text:
-            say(_help_text())
+            respond(_help_text())
             return
 
         parts = raw_text.split(None, 1)
         subcommand = parts[0].lower()
 
         if subcommand == "add":
-            _handle_add(workspace_id, parts, say)
+            _handle_add(workspace_id, parts, respond)
         elif subcommand == "list":
-            _handle_list(workspace_id, say)
+            _handle_list(workspace_id, respond)
         elif subcommand == "delete":
-            _handle_delete(workspace_id, parts, say)
+            _handle_delete(workspace_id, parts, respond)
         else:
-            say(_help_text())
+            respond(_help_text())
 
 
-def _handle_add(workspace_id, parts: list[str], say):
+def _handle_add(workspace_id, parts: list[str], respond):
     if len(parts) < 2:
-        say("사용법: `/rule add \"규칙 내용\"`")
+        respond("사용법: `/slough-rule add \"규칙 내용\"`")
         return
 
     rule_text = parts[1].strip()
@@ -59,56 +71,71 @@ def _handle_add(workspace_id, parts: list[str], say):
         rule_text = match.group(1)
 
     if not rule_text:
-        say("규칙 내용을 입력해 주세요.")
+        respond("규칙 내용을 입력해 주세요.")
         return
 
-    with get_db() as db:
-        rule = create_rule(db, workspace_id, rule_text)
-        rule_id = rule.id
+    try:
+        with get_db() as db:
+            rule = create_rule(db, workspace_id, rule_text)
+            rule_id = rule.id
+    except Exception:
+        logger.exception("Failed to create rule")
+        respond(FALLBACK_RESPONSE)
+        return
 
-    say(f"✅ 규칙이 추가되었습니다. (ID: {rule_id})\n> {rule_text}")
+    respond(f"규칙이 추가되었습니다. (ID: {rule_id})\n> {rule_text}")
 
 
-def _handle_list(workspace_id, say):
-    with get_db() as db:
-        rules = get_active_rules(db, workspace_id)
+def _handle_list(workspace_id, respond):
+    try:
+        with get_db() as db:
+            rules = get_active_rules(db, workspace_id)
+    except Exception:
+        logger.exception("Failed to list rules")
+        respond(FALLBACK_RESPONSE)
+        return
 
     if not rules:
-        say("등록된 규칙이 없습니다. `/rule add \"규칙 내용\"`으로 추가하세요.")
+        respond("등록된 규칙이 없습니다. `/slough-rule add \"규칙 내용\"`으로 추가하세요.")
         return
 
     lines = ["*등록된 규칙 목록:*"]
     for rule in rules:
         lines.append(f"  `{rule.id}` — {rule.rule_text}")
 
-    say("\n".join(lines))
+    respond("\n".join(lines))
 
 
-def _handle_delete(workspace_id, parts: list[str], say):
+def _handle_delete(workspace_id, parts: list[str], respond):
     if len(parts) < 2:
-        say("사용법: `/rule delete [ID]`")
+        respond("사용법: `/slough-rule delete [ID]`")
         return
 
     try:
         rule_id = int(parts[1].strip())
     except ValueError:
-        say("규칙 ID는 숫자여야 합니다.")
+        respond("규칙 ID는 숫자여야 합니다.")
         return
 
-    with get_db() as db:
-        deleted = delete_rule(db, rule_id, workspace_id)
+    try:
+        with get_db() as db:
+            deleted = delete_rule(db, rule_id, workspace_id)
+    except Exception:
+        logger.exception("Failed to delete rule")
+        respond(FALLBACK_RESPONSE)
+        return
 
     if not deleted:
-        say(f"ID {rule_id}에 해당하는 규칙을 찾을 수 없습니다.")
+        respond(f"ID {rule_id}에 해당하는 규칙을 찾을 수 없습니다.")
         return
 
-    say(f"🗑️ 규칙이 삭제되었습니다. (ID: {rule_id})")
+    respond(f"규칙이 삭제되었습니다. (ID: {rule_id})")
 
 
 def _help_text() -> str:
     return (
-        "*`/rule` 명령어 사용법:*\n"
-        "• `/rule add \"규칙 내용\"` — 새 규칙 추가\n"
+        "*`/slough-rule` 명령어 사용법:*\n"
+        "• `/slough-rule add \"규칙 내용\"` — 새 규칙 추가\n"
         "• `/rule list` — 등록된 규칙 목록\n"
-        "• `/rule delete [ID]` — 규칙 삭제"
+        "• `/slough-rule delete [ID]` — 규칙 삭제"
     )

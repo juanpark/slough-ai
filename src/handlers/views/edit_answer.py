@@ -50,15 +50,18 @@ def register(app):
         except (ValueError, Exception):
             logger.warning("Could not update feedback in DB", extra={"qa_id": qa_id})
 
-        # Call AI feedback stub
-        asyncio.run(
-            process_feedback(
-                workspace_id=workspace_id,
-                question_id=qa_id,
-                feedback_type="corrected",
-                corrected_answer=corrected_answer,
+        # Call AI feedback pipeline
+        try:
+            asyncio.run(
+                process_feedback(
+                    workspace_id=workspace_id,
+                    question_id=qa_id,
+                    feedback_type="corrected",
+                    corrected_answer=corrected_answer,
+                )
             )
-        )
+        except Exception:
+            logger.exception("AI process_feedback failed", extra={"qa_id": qa_id})
 
         # Update the decision-maker's review message to show edit was applied
         if channel_id and message_ts:
