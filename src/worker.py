@@ -27,5 +27,7 @@ celery_app.conf.update(
     },
 )
 
-# Auto-discover tasks in src/tasks/
-celery_app.autodiscover_tasks(["src.tasks"])
+celery_app.conf.include = [
+    "src.tasks.ingestion",
+    "src.tasks.weekly_report",
+]
