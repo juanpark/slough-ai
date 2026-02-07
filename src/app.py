@@ -1,4 +1,5 @@
 import logging
+
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
@@ -13,24 +14,19 @@ app = App(
     signing_secret=settings.slack_signing_secret,
 )
 
-# -- Event handlers --
+# -- Register handlers --
 
-@app.event("message")
-def handle_message(event, say):
-    """Handle DM messages from employees."""
-    # TODO: Wire to AI pipeline
-    logger.info("Received message", extra={"user": event.get("user"), "channel": event.get("channel")})
-    say("[STUB] 메시지를 수신했습니다. AI 파이프라인 연결 전입니다.")
+from src.handlers.events import message as message_handler
+from src.handlers.commands import rule as rule_handler
+from src.handlers.actions import review_request as review_request_handler
+from src.handlers.actions import feedback as feedback_handler
+from src.handlers.views import edit_answer as edit_answer_handler
 
-
-# -- Slash commands --
-
-@app.command("/rule")
-def handle_rule_command(ack, command, say):
-    """Handle /rule add|list|delete commands."""
-    ack()
-    # TODO: Implement rule management
-    say("[STUB] /rule 명령어를 수신했습니다.")
+message_handler.register(app)
+rule_handler.register(app)
+review_request_handler.register(app)
+feedback_handler.register(app)
+edit_answer_handler.register(app)
 
 
 # -- Entry point --

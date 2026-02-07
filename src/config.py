@@ -23,9 +23,8 @@ class Settings(BaseSettings):
     pinecone_index_name: str = "slough-contexts"
 
     # App
-    node_env: str = "development"
+    environment: str = "development"
     log_level: str = "DEBUG"
-    port: int = 3000
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
