@@ -92,14 +92,19 @@ def handle_installation(oauth_response: dict) -> None:
     with get_db() as db:
         existing = get_workspace_by_team_id(db, team_id)
         if existing:
-            update_workspace(
-                db,
-                existing.id,
+            # Reactivate if previously uninstalled (within retention period)
+            update_fields = dict(
                 slack_team_name=team_name,
                 admin_id=installer_id,
                 bot_token=bot_token,
+                uninstalled_at=None,
+                data_deletion_at=None,
             )
-            logger.info("Updated workspace for team %s", team_id)
+            update_workspace(db, existing.id, **update_fields)
+            if existing.uninstalled_at:
+                logger.info("Reactivated workspace for team %s", team_id)
+            else:
+                logger.info("Updated workspace for team %s", team_id)
         else:
             create_workspace(
                 db,

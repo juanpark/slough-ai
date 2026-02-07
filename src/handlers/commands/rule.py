@@ -136,6 +136,6 @@ def _help_text() -> str:
     return (
         "*`/slough-rule` 명령어 사용법:*\n"
         "• `/slough-rule add \"규칙 내용\"` — 새 규칙 추가\n"
-        "• `/rule list` — 등록된 규칙 목록\n"
+        "• `/slough-rule list` — 등록된 규칙 목록\n"
         "• `/slough-rule delete [ID]` — 규칙 삭제"
     )

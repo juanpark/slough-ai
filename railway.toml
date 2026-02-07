@@ -1,0 +1,7 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "PYTHONPATH=. python entrypoint.py"
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3

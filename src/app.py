@@ -18,6 +18,7 @@ app = App(
 # -- Register handlers --
 
 from src.handlers.events import message as message_handler
+from src.handlers.events import uninstall as uninstall_handler
 from src.handlers.commands import rule as rule_handler
 from src.handlers.commands import stats as stats_handler
 from src.handlers.commands import help as help_handler
@@ -28,6 +29,7 @@ from src.handlers.views import edit_answer as edit_answer_handler
 from src.handlers.views import onboarding as onboarding_view_handler
 
 message_handler.register(app)
+uninstall_handler.register(app)
 rule_handler.register(app)
 stats_handler.register(app)
 help_handler.register(app)

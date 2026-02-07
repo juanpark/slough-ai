@@ -31,6 +31,8 @@ class Workspace(Base):
     bot_token = Column(Text, nullable=False)
     user_token = Column(Text, nullable=True, default="")
     installed_at = Column(DateTime, server_default=func.now())
+    uninstalled_at = Column(DateTime, nullable=True)
+    data_deletion_at = Column(DateTime, nullable=True)  # 30 days after uninstall
     onboarding_completed = Column(Boolean, default=False)
     onboarding_completed_at = Column(DateTime)
     created_at = Column(DateTime, server_default=func.now())
