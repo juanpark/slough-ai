@@ -29,8 +29,8 @@ def register(app):
 
     @app.event("message")
     def handle_message(event, say, client):
-        # Only handle plain DM messages (no subtypes like bot_message, message_changed, etc.)
-        if event.get("subtype"):
+        # Ignore bot messages and message subtypes (edits, deletes, etc.)
+        if event.get("subtype") or event.get("bot_id"):
             return
 
         # Only handle DMs (channel_type == "im")
