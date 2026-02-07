@@ -18,10 +18,6 @@ class Settings(BaseSettings):
     # LLM
     openai_api_key: str = ""
 
-    # Pinecone
-    pinecone_api_key: str = ""
-    pinecone_index_name: str = "slough-contexts"
-
     # App
     environment: str = "development"
     log_level: str = "DEBUG"

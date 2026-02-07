@@ -17,6 +17,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
+from pgvector.sqlalchemy import Vector
+
 from src.services.db.connection import Base
 
 
@@ -127,3 +129,18 @@ class IngestionJob(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     workspace = relationship("Workspace", back_populates="ingestion_jobs")
+
+
+class Embedding(Base):
+    __tablename__ = "embeddings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    content = Column(Text, nullable=False)
+    embedding = Column(Vector(1536), nullable=False)  # text-embedding-3-small
+    channel_id = Column(String(64))
+    message_ts = Column(String(64))
+    thread_ts = Column(String(64))
+    created_at = Column(DateTime, server_default=func.now())
+
+    workspace = relationship("Workspace")

@@ -4,6 +4,10 @@ AI Service Interface Contract
 This is the boundary between Slack-side (Juan) and AI-side (Teammate).
 Juan calls these functions; Teammate implements them.
 
+Vector DB: pgvector (PostgreSQL extension) — NOT Pinecone.
+Embeddings are stored in the 'embeddings' table via pgvector.
+See src/services/db/models.py for the Embedding model.
+
 Current: STUB implementations for development.
 """
 

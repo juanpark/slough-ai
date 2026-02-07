@@ -31,9 +31,10 @@
 | Slack SDK | Slack Bolt for Python |
 | LLM | OpenAI GPT-4o (팀원 담당) |
 | 임베딩 | OpenAI text-embedding-3-small (팀원 담당) |
-| 벡터 DB | Pinecone Serverless (팀원 담당) |
+| 벡터 DB | pgvector (PostgreSQL 확장) |
 | RDBMS | PostgreSQL |
 | 작업 큐 | Celery + Redis |
+| 패키지 관리 | uv |
 | 배포 | Railway (web / worker / beat 3-서비스) |
 
 ---
@@ -163,7 +164,7 @@ async def generate_answer(
     호출 위치: src/handlers/events/message.py (line 80)
 
     구현 방향:
-    1. question을 임베딩하여 Pinecone에서 유사 대화 검색
+    1. question을 임베딩하여 pgvector에서 유사 대화 검색
     2. rules가 있으면 프롬프트에 규칙을 우선 반영
     3. 의사결정자 페르소나 프롬프트 + 검색된 컨텍스트로 GPT-4o 호출
     4. 금지 도메인이면 is_prohibited=True 반환
@@ -193,7 +194,7 @@ async def ingest_messages(
     구현 방향:
     1. messages를 의미 단위로 청킹
     2. 각 청크를 text-embedding-3-small로 임베딩
-    3. Pinecone에 workspace_id 네임스페이스로 저장
+    3. pgvector embeddings 테이블에 workspace_id로 저장
     4. 메타데이터: channel, ts, thread_ts 포함
 
     반환값:
@@ -230,11 +231,11 @@ async def process_feedback(
 ```
 [팀원 DM] → message.py → generate_answer() → [AI 답변 반환]
                               ↓
-                    Pinecone 검색 + GPT-4o 생성
+                    pgvector 검색 + GPT-4o 생성
 
 [온보딩]   → onboarding.py → Celery task → ingest.py → ingest_messages()
                                                 ↓
-                                      청킹 → 임베딩 → Pinecone 저장
+                                      청킹 → 임베딩 → pgvector 저장
 
 [피드백]   → feedback.py → process_feedback() → [학습 데이터 갱신]
 ```
@@ -247,7 +248,7 @@ AI 코드는 `src/services/ai/` 디렉토리 안에 작성합니다:
 src/services/ai/
 ├── __init__.py          # 인터페이스 (수정 — 스텁을 실제 구현으로 교체)
 ├── embeddings.py        # OpenAI 임베딩 생성 (새로 작성)
-├── vector_search.py     # Pinecone 검색 (새로 작성)
+├── vector_search.py     # pgvector 검색 (새로 작성)
 ├── generation.py        # GPT-4o 답변 생성 (새로 작성)
 ├── persona.py           # 페르소나 프롬프트 구성 (새로 작성)
 └── chunking.py          # 메시지 청킹 로직 (새로 작성)
@@ -259,11 +260,11 @@ src/services/ai/
 
 ```env
 OPENAI_API_KEY=sk-...              # GPT-4o + 임베딩
-PINECONE_API_KEY=...               # Pinecone 벡터 DB
-PINECONE_INDEX_NAME=slough-contexts
+DATABASE_URL=postgresql://...      # pgvector가 활성화된 PostgreSQL
 ```
 
-Railway에 이미 설정되어 있습니다. 로컬에서는 `.env` 파일에 추가하세요.
+벡터 저장소는 별도 서비스 없이 기존 PostgreSQL에 pgvector 확장으로 통합됩니다.
+Railway에서는 pgvector 템플릿으로 Postgres를 배포해야 합니다.
 
 ### 규칙 우선순위
 
@@ -287,12 +288,11 @@ system_prompt = f"""
 ## 로컬 개발 환경 설정
 
 ```bash
-# 1. 가상환경 생성
-python -m venv venv
-source venv/bin/activate
+# 1. uv 설치 (없는 경우)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# 2. 의존성 설치
-pip install -r requirements.txt
+# 2. 의존성 설치 (가상환경 자동 생성)
+uv sync
 
 # 3. 환경변수 설정
 cp .env.example .env
@@ -302,16 +302,16 @@ cp .env.example .env
 docker-compose up -d
 
 # 5. DB 테이블 생성
-alembic upgrade head
+uv run alembic upgrade head
 
 # 6. 앱 실행 (Socket Mode)
-PYTHONPATH=. python src/app.py
+PYTHONPATH=. uv run python src/app.py
 
 # 7. Celery 워커 (별도 터미널)
-PYTHONPATH=. celery -A src.worker worker --loglevel=info --concurrency=2
+PYTHONPATH=. uv run celery -A src.worker worker --loglevel=info --concurrency=2
 
 # 8. Celery Beat (별도 터미널, 주간 리포트 스케줄러)
-PYTHONPATH=. celery -A src.worker beat --loglevel=info
+PYTHONPATH=. uv run celery -A src.worker beat --loglevel=info
 ```
 
 ## 배포 (Railway)
@@ -340,8 +340,9 @@ railway up --service slough-beat
 | `qa_history` | 질문/답변 기록 + 피드백 상태 |
 | `weekly_stats` | 주간 통계 (자동 집계) |
 | `ingestion_jobs` | 데이터 수집 진행 상태 |
+| `embeddings` | 벡터 임베딩 (pgvector, vector(1536)) |
 
-임베딩은 PostgreSQL이 아닌 **Pinecone**에 저장됩니다.
+임베딩은 pgvector 확장을 통해 PostgreSQL에 직접 저장됩니다.
 
 ## 라이선스
 
