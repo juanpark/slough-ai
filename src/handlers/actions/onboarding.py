@@ -66,14 +66,18 @@ def register(app):
                         "block_id": "channel_select_block",
                         "label": {
                             "type": "plain_text",
-                            "text": "학습할 채널",
+                            "text": "학습할 채널 (복수 선택 가능)",
+                        },
+                        "hint": {
+                            "type": "plain_text",
+                            "text": "여러 채널을 선택하면 더 정확한 학습이 가능합니다.",
                         },
                         "element": {
                             "type": "multi_conversations_select",
                             "action_id": "channel_select",
                             "placeholder": {
                                 "type": "plain_text",
-                                "text": "채널을 선택해 주세요",
+                                "text": "채널을 클릭하여 여러 개 선택",
                             },
                             "filter": {
                                 "include": ["public"],
