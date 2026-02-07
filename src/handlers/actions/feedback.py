@@ -3,8 +3,11 @@
 import asyncio
 import json
 import logging
+import uuid as uuid_mod
 
 from src.services.ai import process_feedback
+from src.services.db import get_db
+from src.services.db.qa_history import update_feedback
 from src.utils.blocks import build_feedback_notification
 
 logger = logging.getLogger(__name__)
@@ -47,6 +50,14 @@ def _handle_feedback(body: dict, client, feedback_type: str):
     qa_id = payload.get("qa_id", "")
     asker_id = payload.get("asker_id", "")
     workspace_id = body.get("team", {}).get("id", "stub-workspace")
+
+    # Persist feedback to DB
+    try:
+        qa_uuid = uuid_mod.UUID(qa_id)
+        with get_db() as db:
+            update_feedback(db, qa_uuid, feedback_type)
+    except (ValueError, Exception):
+        logger.warning("Could not update feedback in DB", extra={"qa_id": qa_id})
 
     # Call AI feedback stub
     asyncio.run(

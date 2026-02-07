@@ -3,8 +3,11 @@
 import asyncio
 import json
 import logging
+import uuid as uuid_mod
 
 from src.services.ai import process_feedback
+from src.services.db import get_db
+from src.services.db.qa_history import update_feedback
 from src.utils.blocks import build_feedback_notification
 
 logger = logging.getLogger(__name__)
@@ -39,6 +42,14 @@ def register(app):
         message_ts = metadata.get("message_ts", "")
         workspace_id = body.get("team", {}).get("id", "stub-workspace")
 
+        # Persist feedback to DB
+        try:
+            qa_uuid = uuid_mod.UUID(qa_id)
+            with get_db() as db:
+                update_feedback(db, qa_uuid, "corrected", corrected_answer)
+        except (ValueError, Exception):
+            logger.warning("Could not update feedback in DB", extra={"qa_id": qa_id})
+
         # Call AI feedback stub
         asyncio.run(
             process_feedback(
@@ -52,7 +63,6 @@ def register(app):
         # Update the decision-maker's review message to show edit was applied
         if channel_id and message_ts:
             try:
-                # Fetch original message to preserve context blocks
                 result = client.conversations_history(
                     channel=channel_id,
                     latest=message_ts,

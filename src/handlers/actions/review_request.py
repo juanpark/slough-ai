@@ -2,13 +2,14 @@
 
 import json
 import logging
+import uuid as uuid_mod
 
+from src.services.db import get_db
+from src.services.db.workspaces import get_workspace_by_team_id
+from src.services.db.qa_history import get_qa_record, update_review_status
 from src.utils.blocks import build_review_request_blocks
 
 logger = logging.getLogger(__name__)
-
-# TODO: Replace with DB lookup per workspace
-STUB_DECISION_MAKER_ID = "DECISION_MAKER_USER_ID"
 
 
 def register(app):
@@ -20,6 +21,7 @@ def register(app):
 
         user_id = body["user"]["id"]
         action = body["actions"][0]
+        team_id = body.get("team", {}).get("id", "")
 
         try:
             payload = json.loads(action["value"])
@@ -28,37 +30,40 @@ def register(app):
             return
 
         qa_id = payload.get("qa_id", "")
-
-        # Get the original message to extract question and answer
         channel = body["channel"]["id"]
-        message = body.get("message", {})
-        # The answer is in the first block's text
-        answer = ""
-        if message.get("blocks"):
-            first_block = message["blocks"][0]
-            answer = first_block.get("text", {}).get("text", "")
 
-        # Get the original question from the conversation
-        # For now, we look at the previous message in the thread
-        # TODO: Store question in DB and retrieve by qa_id
-        question = "(원본 질문을 불러올 수 없습니다 — DB 연결 후 개선 예정)"
+        # Look up workspace for decision_maker_id
+        with get_db() as db:
+            workspace = get_workspace_by_team_id(db, team_id)
 
-        # Try to get the question from the message before the bot reply
-        try:
-            history = client.conversations_history(
+        if workspace is None:
+            logger.error("Workspace not found for review request", extra={"team_id": team_id})
+            client.chat_postMessage(
                 channel=channel,
-                latest=message.get("ts"),
-                limit=2,
-                inclusive=False,
+                text="워크스페이스 설정이 완료되지 않았습니다.",
             )
-            if history["messages"]:
-                # Messages are in reverse chronological order
-                for msg in history["messages"]:
-                    if msg.get("user") == user_id:
-                        question = msg.get("text", question)
-                        break
-        except Exception:
-            logger.warning("Could not fetch conversation history for question")
+            return
+
+        decision_maker_id = workspace.decision_maker_id
+
+        # Try to get question and answer from the QA record in DB
+        question = "(원본 질문을 불러올 수 없습니다)"
+        answer = ""
+        try:
+            qa_uuid = uuid_mod.UUID(qa_id)
+            with get_db() as db:
+                record = get_qa_record(db, qa_uuid)
+                if record:
+                    question = record.question
+                    answer = record.answer
+                    update_review_status(db, qa_uuid, "requested")
+        except (ValueError, Exception):
+            logger.warning("Could not fetch QA record", extra={"qa_id": qa_id})
+            # Fall back to reading from the message
+            message = body.get("message", {})
+            if message.get("blocks"):
+                first_block = message["blocks"][0]
+                answer = first_block.get("text", {}).get("text", "")
 
         # Send review request to decision-maker
         blocks = build_review_request_blocks(
@@ -69,8 +74,7 @@ def register(app):
         )
 
         try:
-            # Open DM with decision-maker
-            dm = client.conversations_open(users=[STUB_DECISION_MAKER_ID])
+            dm = client.conversations_open(users=[decision_maker_id])
             dm_channel = dm["channel"]["id"]
 
             client.chat_postMessage(
@@ -80,7 +84,6 @@ def register(app):
             )
         except Exception:
             logger.exception("Failed to send review request to decision-maker")
-            # Notify user of failure
             client.chat_postMessage(
                 channel=channel,
                 text="검토 요청 전송에 실패했습니다. 관리자에게 문의해 주세요.",
