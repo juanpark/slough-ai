@@ -1,0 +1,13 @@
+.git
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+.env
+.env.example
+docker-compose.yml
+README.md
+docs/
+tests/
