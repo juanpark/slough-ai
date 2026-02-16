@@ -13,6 +13,19 @@ logger = logging.getLogger(__name__)
 _PAGE_DELAY_SECONDS = 0.5
 
 
+def join_channel(client: WebClient, channel_id: str) -> bool:
+    """Join a public channel. Returns True if successful or already joined."""
+    try:
+        client.conversations_join(channel=channel_id)
+        logger.info("Bot joined channel %s", channel_id)
+        return True
+    except SlackApiError as e:
+        if e.response.get("error") == "already_in_channel":
+            return True
+        logger.exception("Failed to join channel %s", channel_id)
+        return False
+
+
 def list_bot_channels(client: WebClient) -> list[dict]:
     """List all public channels the bot has been added to.
 

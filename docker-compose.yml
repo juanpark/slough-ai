@@ -1,7 +1,7 @@
 services:
   # PostgreSQL
   postgres:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     container_name: slough-postgres
     environment:
       POSTGRES_DB: slough
@@ -40,6 +40,56 @@ services:
       - "8080:8080"
     depends_on:
       - postgres
+
+  # Backend (Slack Bolt App)
+  backend:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app
+    environment:
+      SERVICE_TYPE: web
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/slough
+      REDIS_HOST: redis
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Worker (Celery)
+  worker:
+    build: .
+    volumes:
+      - .:/app
+    environment:
+      SERVICE_TYPE: worker
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/slough
+      REDIS_HOST: redis
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Beat (Scheduler)
+  beat:
+    build: .
+    volumes:
+      - .:/app
+    environment:
+      SERVICE_TYPE: beat
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/slough
+      REDIS_HOST: redis
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   pgdata:

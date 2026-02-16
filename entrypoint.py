@@ -7,7 +7,7 @@ import sys
 SERVICE_TYPE = os.environ.get("SERVICE_TYPE", "web")
 
 COMMANDS = {
-    "web": ["python", "src/app.py"],
+    "web": ["python", "-m", "src.app"],
     "worker": ["celery", "-A", "src.worker", "worker", "--loglevel=info", "--concurrency=2"],
     "beat": ["celery", "-A", "src.worker", "beat", "--loglevel=info"],
 }

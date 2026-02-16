@@ -19,6 +19,7 @@ from src.services.db.ingestion_jobs import (
 from src.services.db.workspaces import get_workspace_by_team_id, update_workspace
 from src.services.slack.conversations import (
     fetch_channel_history,
+    join_channel,
     list_bot_channels,
 )
 
@@ -92,6 +93,13 @@ def run_ingestion(team_id: str, channel_ids: list[str] | None = None) -> None:
 
     for ch in channels:
         logger.info("Ingesting #%s (%s)", ch["name"], ch["id"])
+
+        # Auto-join the channel before fetching history
+        if not join_channel(client, ch["id"]):
+            logger.warning("Could not join #%s, skipping", ch["name"])
+            channels_processed += 1
+            continue
+
         try:
             msgs = fetch_channel_history(
                 client,
@@ -157,6 +165,7 @@ def _notify_completion(
     channels_processed: int,
 ) -> None:
     """Send a DM to the decision-maker when ingestion is done."""
+    logger.info("Sending completion DM to %s", user_id)
     try:
         dm = client.conversations_open(users=[user_id])
         channel_id = dm["channel"]["id"]
@@ -170,7 +179,8 @@ def _notify_completion(
                 f"의사결정자님의 사고 방식을 반영한 답변을 제공합니다."
             ),
         )
-    except SlackApiError:
+        logger.info("Completion DM sent to %s", user_id)
+    except Exception:
         logger.exception("Failed to send completion DM to %s", user_id)
 
 

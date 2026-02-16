@@ -4,6 +4,9 @@
 -- Enable UUID generation
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+-- Enable pgvector for embeddings
+CREATE EXTENSION IF NOT EXISTS "vector";
+
 -- Workspaces table (stores installed workspace info)
 CREATE TABLE IF NOT EXISTS workspaces (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -14,6 +17,8 @@ CREATE TABLE IF NOT EXISTS workspaces (
     bot_token TEXT NOT NULL,
     user_token TEXT DEFAULT '',
     installed_at TIMESTAMP DEFAULT NOW(),
+    uninstalled_at TIMESTAMP,
+    data_deletion_at TIMESTAMP,
     onboarding_completed BOOLEAN DEFAULT FALSE,
     onboarding_completed_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT NOW(),
@@ -53,6 +58,7 @@ CREATE TABLE IF NOT EXISTS qa_history (
     feedback_type VARCHAR(20),  -- approved, rejected, corrected, caution
     corrected_answer TEXT,
     feedback_at TIMESTAMP,
+    is_reflected BOOLEAN DEFAULT FALSE,  -- feedback → KB sync tracking
 
     -- Metadata
     is_high_risk BOOLEAN DEFAULT FALSE,
@@ -117,6 +123,25 @@ CREATE TRIGGER update_rules_updated_at
     BEFORE UPDATE ON rules
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
+
+-- Embeddings table (pgvector — stores vectorized message chunks)
+CREATE TABLE IF NOT EXISTS embeddings (
+    id SERIAL PRIMARY KEY,
+    workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE NOT NULL,
+    content TEXT NOT NULL,
+    embedding vector(1536) NOT NULL,
+    channel_id VARCHAR(64),
+    message_ts VARCHAR(64),
+    thread_ts VARCHAR(64),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Index for workspace lookup
+CREATE INDEX IF NOT EXISTS embeddings_workspace_idx ON embeddings(workspace_id);
+
+-- IVFFlat index for fast similarity search
+CREATE INDEX IF NOT EXISTS embeddings_ivfflat_idx
+ON embeddings USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 
 DO $$
 BEGIN
