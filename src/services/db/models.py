@@ -79,6 +79,7 @@ class QAHistory(Base):
     feedback_type = Column(String(20))
     corrected_answer = Column(Text)
     feedback_at = Column(DateTime)
+    is_reflected = Column(Boolean, default=False)  # feedback → KB sync tracking
 
     # Metadata
     is_high_risk = Column(Boolean, default=False)

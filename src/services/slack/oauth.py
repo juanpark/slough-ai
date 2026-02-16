@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 # All bot scopes the app needs
 BOT_SCOPES = [
     "channels:history",
+    "channels:join",
     "channels:read",
     "chat:write",
     "commands",
