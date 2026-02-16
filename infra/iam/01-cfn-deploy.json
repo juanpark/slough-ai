@@ -1,0 +1,30 @@
+{
+	"Version": "2012-10-17",
+	"Statement": [
+		{
+			"Sid": "CloudFormationStackManagement",
+			"Effect": "Allow",
+			"Action": [
+				"cloudformation:CreateStack",
+				"cloudformation:UpdateStack",
+				"cloudformation:DeleteStack",
+				"cloudformation:DescribeStackEvents",
+				"cloudformation:DescribeStackResources",
+				"cloudformation:GetTemplate",
+				"cloudformation:ListStackResources"
+			],
+			"Resource": "arn:aws:cloudformation:ap-northeast-2:*:stack/slough-ai/*"
+		},
+		{
+			"Sid": "CloudFormationGlobalRead",
+			"Effect": "Allow",
+			"Action": [
+				"cloudformation:ValidateTemplate",
+				"cloudformation:GetTemplateSummary",
+				"cloudformation:ListStacks",
+				"cloudformation:DescribeStacks"
+			],
+			"Resource": "*"
+		}
+	]
+}

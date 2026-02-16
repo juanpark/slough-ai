@@ -1,0 +1,696 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "SloughAI Infrastructure: VPC, ECS (Fargate), RDS, ElastiCache, ALB, WAF (Cost Optimized)"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: "slough-ai"
+    Description: "Project Name (used for resource naming)"
+
+  Environment:
+    Type: String
+    Default: "production"
+    AllowedValues: ["production", "staging", "dev"]
+
+  # Network
+  VpcCIDR:
+    Type: String
+    Default: "10.0.0.0/16"
+  PublicSubnet1CIDR:
+    Type: String
+    Default: "10.0.1.0/24"
+  PublicSubnet2CIDR:
+    Type: String
+    Default: "10.0.2.0/24"
+  PrivateSubnet1CIDR:
+    Type: String
+    Default: "10.0.3.0/24"
+  PrivateSubnet2CIDR:
+    Type: String
+    Default: "10.0.4.0/24"
+
+  # Database (RDS)
+  DBUser:
+    Type: String
+    Default: "slough_user"
+  DBPassword:
+    Type: String
+    NoEcho: true
+    Description: "PostgreSQL Password"
+  DBName:
+    Type: String
+    Default: "slough"
+  DBInstanceClass:
+    Type: String
+    Default: "db.t3.micro"
+
+  # Cache (Redis)
+  RedisNodeType:
+    Type: String
+    Default: "cache.t3.micro"
+
+  # Container Images
+  AppImageURI:
+    Type: String
+    Description: "ECR Image URI (single image, SERVICE_TYPE selects role)"
+
+  # External Secrets (Secrets Manager ARN)
+  SecretArn:
+    Type: String
+    Description: "ARN of Secrets Manager containing OPENAI_API_KEY, SLACK_TOKENS etc."
+
+  # HTTPS (Optional)
+  CertificateArn:
+    Type: String
+    Description: "ACM Certificate ARN for HTTPS (leave empty for HTTP)"
+    Default: ""
+
+Conditions:
+  UseHTTPS: !Not
+    - !Equals
+      - !Ref CertificateArn
+      - ""
+
+Resources:
+  # ==================================================================================
+  # 1. VPC & Network (Cost Optimized: No NAT Gateway)
+  # ==================================================================================
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: !Sub "${ProjectName}-vpc" }]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{ Key: Name, Value: !Sub "${ProjectName}-igw" }]
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Route Tables
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags: [{ Key: Name, Value: !Sub "${ProjectName}-public-rt" }]
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags: [{ Key: Name, Value: !Sub "${ProjectName}-private-rt" }]
+
+  # Subnets
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: !Ref PublicSubnet1CIDR
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: !Sub "${ProjectName}-public-subnet-1" }]
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: !Ref PublicSubnet2CIDR
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: !Sub "${ProjectName}-public-subnet-2" }]
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "${ProjectName}-private-subnet-1" }]
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: !Ref PrivateSubnet2CIDR
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "${ProjectName}-private-subnet-2" }]
+
+  # Associations
+  PublicSubnet1Assoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      { SubnetId: !Ref PublicSubnet1, RouteTableId: !Ref PublicRouteTable }
+  PublicSubnet2Assoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      { SubnetId: !Ref PublicSubnet2, RouteTableId: !Ref PublicRouteTable }
+  PrivateSubnet1Assoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      { SubnetId: !Ref PrivateSubnet1, RouteTableId: !Ref PrivateRouteTable }
+  PrivateSubnet2Assoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      { SubnetId: !Ref PrivateSubnet2, RouteTableId: !Ref PrivateRouteTable }
+
+  # ==================================================================================
+  # 2. Security Groups
+  # ==================================================================================
+  ALBSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Allow HTTP/HTTPS access to ALB"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: "0.0.0.0/0"
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: "0.0.0.0/0"
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: "0.0.0.0/0"
+
+  # App SG (FastAPI): Allow Port 3000 from ALB only
+  AppSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security Group for FastAPI App (port 3000)"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          SourceSecurityGroupId: !Ref ALBSG
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: "0.0.0.0/0"
+
+  # Worker SG (Celery Worker + Beat): No Inbound needed
+  WorkerSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security Group for Celery Worker/Beat"
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: "0.0.0.0/0"
+
+  # Data SG (RDS & Redis): Inbound from App & Worker Only
+  DataSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security Group for RDS and Redis"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref AppSG
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref WorkerSG
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          SourceSecurityGroupId: !Ref AppSG
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          SourceSecurityGroupId: !Ref WorkerSG
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: "0.0.0.0/0"
+
+  # ==================================================================================
+  # 3. Application Load Balancer (ALB) & WAF
+  # ==================================================================================
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${ProjectName}-alb"
+      Scheme: internet-facing
+      Subnets: [!Ref PublicSubnet1, !Ref PublicSubnet2]
+      SecurityGroups: [!Ref ALBSG]
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: "300"
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-tg"
+      VpcId: !Ref VPC
+      Protocol: HTTP
+      Port: 3000
+      TargetType: ip
+      HealthCheckPath: "/health"
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher: { HttpCode: "200" }
+
+  HTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  HTTPSListener:
+    Condition: UseHTTPS
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      Certificates: [{ CertificateArn: !Ref CertificateArn }]
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # WAF Web ACL (Rate Limiting - Slack webhook protection)
+  WAFWebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub "${ProjectName}-waf"
+      Scope: REGIONAL
+      DefaultAction: { Allow: {} }
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "${ProjectName}-waf"
+      Rules:
+        - Name: RateLimit
+          Priority: 1
+          Action: { Block: {} }
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: RateLimit
+          Statement:
+            RateBasedStatement:
+              Limit: 2000
+              AggregateKeyType: IP
+
+  WAFWebACLAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !Ref LoadBalancer
+      WebACLArn: !GetAtt WAFWebACL.Arn
+
+  # ==================================================================================
+  # 4. Managed Data Stores (RDS PostgreSQL + pgvector, ElastiCache Redis)
+  # ==================================================================================
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: "Private Subnets for RDS"
+      SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
+
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub "${ProjectName}-db"
+      Engine: postgres
+      EngineVersion: "16.6"
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: "20"
+      StorageType: gp3
+      DBName: !Ref DBName
+      MasterUsername: !Ref DBUser
+      MasterUserPassword: !Ref DBPassword
+      VPCSecurityGroups: [!Ref DataSG]
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      PubliclyAccessible: false
+      MultiAZ: false
+      BackupRetentionPeriod: 7
+      EnablePerformanceInsights: true
+
+  CacheSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      Description: "Private Subnets for Redis"
+      SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
+
+  RedisCluster:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      ReplicationGroupId: !Sub "${ProjectName}-redis"
+      ReplicationGroupDescription: "Redis for Celery Broker/Backend and Dedup Cache"
+      Engine: redis
+      CacheNodeType: !Ref RedisNodeType
+      NumCacheClusters: 1
+      AutomaticFailoverEnabled: false
+      CacheSubnetGroupName: !Ref CacheSubnetGroup
+      SecurityGroupIds: [!Ref DataSG]
+      AtRestEncryptionEnabled: true
+      TransitEncryptionEnabled: false # false for simpler redis:// URLs (no TLS)
+
+  # ==================================================================================
+  # 5. ECS Fargate Cluster & Task Definitions
+  # ==================================================================================
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "${ProjectName}-cluster"
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/${ProjectName}"
+      RetentionInDays: 30
+
+  # IAM Roles
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: "sts:AssumeRole"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "secretsmanager:GetSecretValue"
+                Resource: !Ref SecretArn
+
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: ECSExecPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "ssmmessages:CreateControlChannel"
+                  - "ssmmessages:CreateDataChannel"
+                  - "ssmmessages:OpenControlChannel"
+                  - "ssmmessages:OpenDataChannel"
+                Resource: "*"
+
+  # ---------- FastAPI Web App Task Definition ----------
+  AppTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${ProjectName}-app"
+      NetworkMode: awsvpc
+      RequiresCompatibilities: ["FARGATE"]
+      Cpu: "256"
+      Memory: "512"
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      ContainerDefinitions:
+        - Name: app
+          Image: !Ref AppImageURI
+          PortMappings: [{ ContainerPort: 3000 }]
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: "app"
+          Environment:
+            - Name: SERVICE_TYPE
+              Value: "web"
+            - Name: DATABASE_URL
+              Value: !Sub "postgresql://${DBUser}:${DBPassword}@${RDSInstance.Endpoint.Address}:5432/${DBName}"
+            - Name: REDIS_HOST
+              Value: !GetAtt RedisCluster.PrimaryEndPoint.Address
+            - Name: REDIS_PORT
+              Value: "6379"
+            - Name: ENVIRONMENT
+              Value: !Ref Environment
+            - Name: LOG_LEVEL
+              Value: "INFO"
+            - Name: APP_PORT
+              Value: "3000"
+            - Name: APP_BASE_URL
+              Value: !Sub "https://${CloudFrontDistribution.DomainName}"
+          Secrets:
+            - Name: OPENAI_API_KEY
+              ValueFrom: !Sub "${SecretArn}:OPENAI_API_KEY::"
+            - Name: SLACK_BOT_TOKEN
+              ValueFrom: !Sub "${SecretArn}:SLACK_BOT_TOKEN::"
+            - Name: SLACK_SIGNING_SECRET
+              ValueFrom: !Sub "${SecretArn}:SLACK_SIGNING_SECRET::"
+            - Name: SLACK_CLIENT_ID
+              ValueFrom: !Sub "${SecretArn}:SLACK_CLIENT_ID::"
+            - Name: SLACK_CLIENT_SECRET
+              ValueFrom: !Sub "${SecretArn}:SLACK_CLIENT_SECRET::"
+
+  # ---------- Celery Worker Task Definition ----------
+  WorkerTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${ProjectName}-worker"
+      NetworkMode: awsvpc
+      RequiresCompatibilities: ["FARGATE"]
+      Cpu: "512"
+      Memory: "1024"
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      ContainerDefinitions:
+        - Name: worker
+          Image: !Ref AppImageURI
+          # entrypoint.py reads SERVICE_TYPE to decide command
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: "worker"
+          Environment:
+            - Name: SERVICE_TYPE
+              Value: "worker"
+            - Name: DATABASE_URL
+              Value: !Sub "postgresql://${DBUser}:${DBPassword}@${RDSInstance.Endpoint.Address}:5432/${DBName}"
+            - Name: REDIS_HOST
+              Value: !GetAtt RedisCluster.PrimaryEndPoint.Address
+            - Name: REDIS_PORT
+              Value: "6379"
+            - Name: ENVIRONMENT
+              Value: !Ref Environment
+            - Name: LOG_LEVEL
+              Value: "INFO"
+          Secrets:
+            - Name: OPENAI_API_KEY
+              ValueFrom: !Sub "${SecretArn}:OPENAI_API_KEY::"
+            - Name: SLACK_BOT_TOKEN
+              ValueFrom: !Sub "${SecretArn}:SLACK_BOT_TOKEN::"
+            - Name: SLACK_SIGNING_SECRET
+              ValueFrom: !Sub "${SecretArn}:SLACK_SIGNING_SECRET::"
+
+  # ---------- Celery Beat (Scheduler) Task Definition ----------
+  BeatTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${ProjectName}-beat"
+      NetworkMode: awsvpc
+      RequiresCompatibilities: ["FARGATE"]
+      Cpu: "256"
+      Memory: "512"
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      ContainerDefinitions:
+        - Name: beat
+          Image: !Ref AppImageURI
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: "beat"
+          Environment:
+            - Name: SERVICE_TYPE
+              Value: "beat"
+            - Name: DATABASE_URL
+              Value: !Sub "postgresql://${DBUser}:${DBPassword}@${RDSInstance.Endpoint.Address}:5432/${DBName}"
+            - Name: REDIS_HOST
+              Value: !GetAtt RedisCluster.PrimaryEndPoint.Address
+            - Name: REDIS_PORT
+              Value: "6379"
+            - Name: ENVIRONMENT
+              Value: !Ref Environment
+            - Name: LOG_LEVEL
+              Value: "INFO"
+          Secrets:
+            - Name: OPENAI_API_KEY
+              ValueFrom: !Sub "${SecretArn}:OPENAI_API_KEY::"
+
+  # ---------- ECS Services ----------
+  AppService:
+    Type: AWS::ECS::Service
+    DependsOn: HTTPListener
+    Properties:
+      ServiceName: !Sub "${ProjectName}-app-service"
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref AppTaskDefinition
+      LaunchType: FARGATE
+      DesiredCount: 1
+      EnableExecuteCommand: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: [!Ref PublicSubnet1, !Ref PublicSubnet2]
+          SecurityGroups: [!Ref AppSG]
+      LoadBalancers:
+        - ContainerName: app
+          ContainerPort: 3000
+          TargetGroupArn: !Ref TargetGroup
+
+  WorkerService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub "${ProjectName}-worker-service"
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref WorkerTaskDefinition
+      LaunchType: FARGATE
+      DesiredCount: 1
+      EnableExecuteCommand: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: [!Ref PublicSubnet1, !Ref PublicSubnet2]
+          SecurityGroups: [!Ref WorkerSG]
+
+  BeatService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub "${ProjectName}-beat-service"
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref BeatTaskDefinition
+      LaunchType: FARGATE
+      DesiredCount: 1
+      EnableExecuteCommand: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: [!Ref PublicSubnet1, !Ref PublicSubnet2]
+          SecurityGroups: [!Ref WorkerSG]
+
+  # ==================================================================================
+  # 6. ECR Repository
+  # ==================================================================================
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${ProjectName}"
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep last 10 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+
+  # ==================================================================================
+  # 7. CloudFront (HTTPS termination for Slack)
+  # ==================================================================================
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "${ProjectName} HTTPS proxy for Slack"
+        Origins:
+          - Id: ALBOrigin
+            DomainName: !GetAtt LoadBalancer.DNSName
+            CustomOriginConfig:
+              HTTPPort: 80
+              OriginProtocolPolicy: http-only
+        DefaultCacheBehavior:
+          TargetOriginId: ALBOrigin
+          ViewerProtocolPolicy: https-only
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
+          OriginRequestPolicyId: "216adef6-5c7f-47e4-b989-5492eafa07d3"
+        HttpVersion: http2
+        PriceClass: PriceClass_200
+
+Outputs:
+  ALBDNSName:
+    Description: "Application Load Balancer DNS Name (use as SLACK_REQUEST_URL base)"
+    Value: !GetAtt LoadBalancer.DNSName
+    Export:
+      Name: !Sub "${ProjectName}-alb-dns"
+
+  RDSAddress:
+    Description: "RDS PostgreSQL Endpoint Address"
+    Value: !GetAtt RDSInstance.Endpoint.Address
+
+  RedisAddress:
+    Description: "ElastiCache Redis Endpoint Address"
+    Value: !GetAtt RedisCluster.PrimaryEndPoint.Address
+
+  DatabaseURL:
+    Description: "Full DATABASE_URL for the application"
+    Value: !Sub "postgresql://${DBUser}:${DBPassword}@${RDSInstance.Endpoint.Address}:5432/${DBName}"
+
+  ECRRepositoryURI:
+    Description: "ECR Repository URI for docker push"
+    Value: !GetAtt ECRRepository.RepositoryUri
+
+  SlackEventsURL:
+    Description: "Set this as Slack Event Subscriptions Request URL"
+    Value: !Sub "https://${CloudFrontDistribution.DomainName}/slack/events"
+
+  CloudFrontDomain:
+    Description: "CloudFront HTTPS domain (use for Slack app URLs)"
+    Value: !GetAtt CloudFrontDistribution.DomainName

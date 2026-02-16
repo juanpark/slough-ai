@@ -1,0 +1,16 @@
+{
+	"Description": "SloughAI 배포용 IAM 최소 권한 정책 모음. 아래 순서로 실행하세요.",
+	"Steps": [
+		"1. IAM 배포 전용 사용자 생성",
+		"2. 정책 파일들을 AWS에 생성 및 연결",
+		"3. Access Key 발급 후 aws configure"
+	],
+	"Policies": {
+		"slough-ai-cfn-deploy": "CloudFormation 스택 관리",
+		"slough-ai-vpc-network": "VPC, 서브넷, 라우팅, IGW, SG",
+		"slough-ai-ecs-fargate": "ECS 클러스터, 서비스, 태스크, ECR",
+		"slough-ai-data-stores": "RDS, ElastiCache",
+		"slough-ai-alb-waf": "ALB, Target Group, WAF",
+		"slough-ai-supporting": "CloudWatch Logs, Secrets Manager, IAM PassRole"
+	}
+}
