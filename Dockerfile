@@ -32,5 +32,12 @@ RUN uv sync --frozen --no-dev
 # Ensure virtual env is in PATH
 ENV PATH="/venv/bin:$PATH"
 
+# Health check for ECS (web service only)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -f http://localhost:3000/health || exit 1
+
+# Expose the app port
+EXPOSE 3000
+
 # Use entrypoint.py to decide which service to run
 ENTRYPOINT ["uv", "run", "python", "entrypoint.py"]

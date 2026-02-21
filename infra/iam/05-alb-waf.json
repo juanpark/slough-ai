@@ -1,0 +1,60 @@
+{
+	"Version": "2012-10-17",
+	"Statement": [
+		{
+			"Sid": "ALBManagement",
+			"Effect": "Allow",
+			"Action": [
+				"elasticloadbalancing:CreateLoadBalancer",
+				"elasticloadbalancing:DeleteLoadBalancer",
+				"elasticloadbalancing:DescribeLoadBalancers",
+				"elasticloadbalancing:DescribeLoadBalancerAttributes",
+				"elasticloadbalancing:ModifyLoadBalancerAttributes",
+				"elasticloadbalancing:CreateTargetGroup",
+				"elasticloadbalancing:DeleteTargetGroup",
+				"elasticloadbalancing:DescribeTargetGroups",
+				"elasticloadbalancing:ModifyTargetGroup",
+				"elasticloadbalancing:DescribeTargetHealth",
+				"elasticloadbalancing:RegisterTargets",
+				"elasticloadbalancing:DeregisterTargets",
+				"elasticloadbalancing:CreateListener",
+				"elasticloadbalancing:DeleteListener",
+				"elasticloadbalancing:DescribeListeners",
+				"elasticloadbalancing:ModifyListener",
+				"elasticloadbalancing:AddTags",
+				"elasticloadbalancing:DescribeTags",
+				"elasticloadbalancing:SetSecurityGroups",
+				"elasticloadbalancing:SetSubnets",
+				"elasticloadbalancing:SetWebACL"
+			],
+			"Resource": "*",
+			"Condition": {
+				"StringEquals": {
+					"aws:RequestedRegion": "ap-northeast-2"
+				}
+			}
+		},
+		{
+			"Sid": "WAFManagement",
+			"Effect": "Allow",
+			"Action": [
+				"wafv2:CreateWebACL",
+				"wafv2:DeleteWebACL",
+				"wafv2:GetWebACL",
+				"wafv2:UpdateWebACL",
+				"wafv2:ListWebACLs",
+				"wafv2:AssociateWebACL",
+				"wafv2:DisassociateWebACL",
+				"wafv2:GetWebACLForResource",
+				"wafv2:ListTagsForResource",
+				"wafv2:TagResource"
+			],
+			"Resource": "*",
+			"Condition": {
+				"StringEquals": {
+					"aws:RequestedRegion": "ap-northeast-2"
+				}
+			}
+		}
+	]
+}

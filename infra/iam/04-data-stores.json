@@ -1,0 +1,55 @@
+{
+	"Version": "2012-10-17",
+	"Statement": [
+		{
+			"Sid": "RDSManagement",
+			"Effect": "Allow",
+			"Action": [
+				"rds:CreateDBInstance",
+				"rds:DeleteDBInstance",
+				"rds:DescribeDBInstances",
+				"rds:ModifyDBInstance",
+				"rds:CreateDBSubnetGroup",
+				"rds:DeleteDBSubnetGroup",
+				"rds:DescribeDBSubnetGroups",
+				"rds:CreateDBSnapshot",
+				"rds:DeleteDBSnapshot",
+				"rds:DescribeDBSnapshots",
+				"rds:AddTagsToResource",
+				"rds:ListTagsForResource",
+				"rds:DescribeDBEngineVersions",
+				"rds:DescribeOrderableDBInstanceOptions"
+			],
+			"Resource": "*",
+			"Condition": {
+				"StringEquals": {
+					"aws:RequestedRegion": "ap-northeast-2"
+				}
+			}
+		},
+		{
+			"Sid": "ElastiCacheManagement",
+			"Effect": "Allow",
+			"Action": [
+				"elasticache:CreateReplicationGroup",
+				"elasticache:DeleteReplicationGroup",
+				"elasticache:DescribeReplicationGroups",
+				"elasticache:ModifyReplicationGroup",
+				"elasticache:CreateCacheSubnetGroup",
+				"elasticache:DeleteCacheSubnetGroup",
+				"elasticache:DescribeCacheSubnetGroups",
+				"elasticache:DescribeCacheClusters",
+				"elasticache:AddTagsToResource",
+				"elasticache:ListTagsForResource",
+				"elasticache:DescribeCacheEngineVersions",
+				"elasticache:DescribeEngineDefaultParameters"
+			],
+			"Resource": "*",
+			"Condition": {
+				"StringEquals": {
+					"aws:RequestedRegion": "ap-northeast-2"
+				}
+			}
+		}
+	]
+}
