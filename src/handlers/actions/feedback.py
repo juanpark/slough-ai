@@ -8,7 +8,7 @@ import uuid as uuid_mod
 from src.services.ai import process_feedback
 from src.services.db import get_db
 from src.services.db.workspaces import get_workspace_by_team_id
-from src.services.db.qa_history import update_feedback
+from src.services.db.qa_history import get_qa_record, update_feedback
 from src.utils.blocks import build_feedback_notification
 
 logger = logging.getLogger(__name__)
@@ -147,7 +147,17 @@ def _open_edit_modal(body: dict, client):
 
     qa_id = payload.get("qa_id", "")
     asker_id = payload.get("asker_id", "")
-    current_answer = payload.get("answer", "")
+
+    # Fetch current answer from DB (not from button value — Slack 2000 char limit)
+    current_answer = ""
+    try:
+        qa_uuid = uuid_mod.UUID(qa_id)
+        with get_db() as db:
+            record = get_qa_record(db, qa_uuid)
+            if record:
+                current_answer = record.answer
+    except Exception:
+        logger.warning("Could not fetch answer for edit modal", extra={"qa_id": qa_id})
 
     # Store context in private_metadata so we can access it on submission
     private_metadata = json.dumps({

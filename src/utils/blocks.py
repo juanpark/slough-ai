@@ -144,7 +144,6 @@ def build_review_request_blocks(
                     "value": json.dumps({
                         "qa_id": qa_id,
                         "asker_id": asker_id,
-                        "answer": answer,
                     }),
                 },
                 {
