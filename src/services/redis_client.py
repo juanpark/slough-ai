@@ -146,3 +146,20 @@ def sync_rules_from_db() -> int:
 
     logger.info("Synced %d rules from DB to Redis", count)
     return count
+
+
+# ── Persona Cache Helpers ─────────────────────────────────────────────
+
+def get_persona_profile(workspace_id: str) -> str:
+    """Retrieve the auto-extracted persona profile for a workspace.
+
+    Returns an empty string if no profile has been generated yet.
+    """
+    cache = RedisManager.get_cache()
+    return cache.get(f"persona:{workspace_id}") or ""
+
+
+def set_persona_profile(workspace_id: str, profile: str) -> None:
+    """Cache the persona profile for a workspace (no TTL — persists until overwritten)."""
+    cache = RedisManager.get_cache()
+    cache.set(f"persona:{workspace_id}", profile)
