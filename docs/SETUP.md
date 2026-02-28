@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Python 3.10+ installed
+- Python 3.12+ installed
 - Docker & Docker Compose (for local development)
 - Slack workspace (free tier works)
 - OpenAI API key
@@ -14,18 +14,17 @@
 ```bash
 cd slough-ai
 
-# Create and activate virtual environment
-python -m venv venv
-source venv/bin/activate
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install dependencies
-pip install -r requirements.txt
+# Install dependencies (creates venv automatically)
+uv sync
 ```
 
 ### 2. Set Up Local Database
 
 ```bash
-# Start PostgreSQL and Redis
+# Start PostgreSQL (with pgvector) and Redis
 docker-compose up -d
 
 # Verify services are running
@@ -42,8 +41,8 @@ docker-compose ps
 
 ### 4. Configure Slack App
 
-#### Enable Socket Mode
-1. Go to **Settings → Socket Mode**
+#### Enable Socket Mode (for local development)
+1. Go to **Settings -> Socket Mode**
 2. Toggle **Enable Socket Mode** ON
 3. Create App-Level Token with `connections:write` scope
 4. Copy the `xapp-` token
@@ -56,12 +55,11 @@ docker-compose ps
 #### Enable Events
 1. Go to **Event Subscriptions**
 2. Toggle **Enable Events** ON
-3. Subscribe to bot events: `message.im`
+3. Subscribe to bot events: `message.im`, `app_uninstalled`
 
-#### Create Slash Command
+#### Create Slash Commands
 1. Go to **Slash Commands**
-2. Create `/rule` command
-3. Set request URL (will be handled via Socket Mode)
+2. Create commands: `/slough-rule`, `/slough-ingest`, `/slough-stats`, `/slough-help`
 
 #### Enable Interactivity
 1. Go to **Interactivity & Shortcuts**
@@ -87,13 +85,13 @@ nano .env
 ```env
 # Slack Configuration
 SLACK_BOT_TOKEN=xoxb-your-bot-token
-SLACK_APP_TOKEN=xapp-your-app-level-token
+SLACK_APP_TOKEN=xapp-your-app-level-token  # Socket Mode only
 SLACK_SIGNING_SECRET=your-signing-secret
 SLACK_CLIENT_ID=your-client-id
 SLACK_CLIENT_SECRET=your-client-secret
 
-# Database
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/slough
+# Database (PostgreSQL + pgvector)
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/slough
 
 # Redis
 REDIS_URL=redis://localhost:6379
@@ -101,24 +99,28 @@ REDIS_URL=redis://localhost:6379
 # LLM & Embeddings
 OPENAI_API_KEY=sk-your-key
 
-# Vector DB
-PINECONE_API_KEY=your-pinecone-api-key
-PINECONE_INDEX_NAME=slough-contexts
-
 # App Configuration
 LOG_LEVEL=DEBUG
+SERVICE_TYPE=web
 ```
 
 ### 7. Run Migrations
 
 ```bash
-alembic upgrade head
+uv run alembic upgrade head
 ```
 
 ### 8. Start Development Server
 
 ```bash
-python src/app.py
+# Terminal 1: App (Socket Mode)
+PYTHONPATH=. uv run python src/app.py
+
+# Terminal 2: Celery Worker
+PYTHONPATH=. uv run celery -A src.worker worker --loglevel=info --concurrency=2
+
+# Terminal 3: Celery Beat (scheduler)
+PYTHONPATH=. uv run celery -A src.worker beat --loglevel=info
 ```
 
 ### 9. Test the Bot
@@ -137,7 +139,7 @@ version: '3.8'
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_DB: slough
       POSTGRES_USER: postgres
@@ -159,120 +161,40 @@ volumes:
   redisdata:
 ```
 
-## Project Structure Setup
+Note: Use `pgvector/pgvector:pg16` image instead of vanilla PostgreSQL to get pgvector extension pre-installed.
 
-```bash
-# Create directory structure
-mkdir -p src/{handlers/{events,actions,commands,views},services/{slack,ai,db,ingestion,scheduler},utils}
-mkdir -p tests/{unit,integration,fixtures}
-mkdir -p scripts
+## Production Deployment (AWS)
 
-# Create initial files
-touch src/app.py
-touch src/config.py
-touch src/handlers/events/message.py
-touch src/handlers/actions/review_request.py
-touch src/handlers/actions/feedback.py
-touch src/handlers/commands/rule.py
-touch src/handlers/views/edit_answer.py
-touch src/services/slack/messages.py
-touch src/services/slack/conversations.py
-touch src/services/ai/__init__.py
-touch src/services/ai/embeddings.py
-touch src/services/ai/generation.py
-touch src/services/ai/vector_search.py
-touch src/services/db/connection.py
-touch src/services/db/models.py
-touch src/utils/blocks.py
-touch src/utils/keywords.py
-touch src/utils/logger.py
-```
+### AWS Resources
 
-## Requirements (requirements.txt)
+| Service | AWS Resource | Purpose |
+|---------|-------------|---------|
+| Compute | ECS Fargate | 3 services (app, worker, beat) |
+| Database | RDS PostgreSQL | Data + pgvector embeddings |
+| Cache/Queue | ElastiCache Redis | Celery + persona cache |
+| Load Balancer | ALB | HTTP routing |
+| CDN/HTTPS | CloudFront | HTTPS termination for Slack |
+| Container Registry | ECR | Docker image storage |
+| Logging | CloudWatch | Centralized logs |
+| CI/CD | GitHub Actions | Auto-deploy on push to main |
 
-```txt
-# Slack
-slack-bolt>=1.18.0
-slack-sdk>=3.27.0
+### Deployment
 
-# Web framework
-fastapi>=0.110.0
-uvicorn>=0.27.0
+Deployment is automated via GitHub Actions. Push to `main` branch triggers:
+1. Build Docker image
+2. Push to ECR
+3. Update ECS services
 
-# LLM & Embeddings
-openai>=1.12.0
+### Slack App URLs (Production)
 
-# Vector DB
-pinecone-client>=3.1.0
+Set these in your Slack app settings:
 
-# Database
-sqlalchemy>=2.0.0
-asyncpg>=0.29.0
-alembic>=1.13.0
-psycopg2-binary>=2.9.0
+- **Install URL:** `https://{cloudfront-domain}/slack/install`
+- **OAuth Redirect:** `https://{cloudfront-domain}/slack/oauth_redirect`
+- **Event Subscriptions URL:** `https://{cloudfront-domain}/slack/events`
+- **Interactivity Request URL:** `https://{cloudfront-domain}/slack/events`
 
-# Queue
-celery>=5.3.0
-redis>=5.0.0
-
-# Config & Utils
-pydantic-settings>=2.1.0
-structlog>=24.1.0
-python-dotenv>=1.0.0
-
-# Dev
-pytest>=8.0.0
-pytest-asyncio>=0.23.0
-```
-
-## Slack App Manifest (Alternative Setup)
-
-Instead of manual configuration, you can use an app manifest:
-
-```yaml
-display_information:
-  name: Slough.ai
-  description: Decision-Maker Persona AI Assistant
-  background_color: "#2c2d30"
-
-features:
-  bot_user:
-    display_name: Slough.ai
-    always_online: true
-  slash_commands:
-    - command: /rule
-      description: Manage decision-maker rules
-      usage_hint: "add/list/delete [rule]"
-
-oauth_config:
-  scopes:
-    user:
-      - channels:history
-      - channels:read
-      - groups:history
-      - groups:read
-      - im:history
-      - im:read
-      - mpim:history
-      - users:read
-    bot:
-      - chat:write
-      - im:history
-      - im:read
-      - im:write
-      - commands
-      - users:read
-
-settings:
-  event_subscriptions:
-    bot_events:
-      - message.im
-  interactivity:
-    is_enabled: true
-  org_deploy_enabled: false
-  socket_mode_enabled: true
-  token_rotation_enabled: false
-```
+Important: Users must install via the `/slack/install` URL (not the Slack API site button) for OAuth to work properly.
 
 ## Verifying Setup
 
@@ -281,6 +203,9 @@ settings:
 ```bash
 # Connect to PostgreSQL
 docker exec -it slough-postgres psql -U postgres -d slough
+
+# Verify pgvector extension
+SELECT * FROM pg_extension WHERE extname = 'vector';
 
 # List tables
 \dt
@@ -326,23 +251,6 @@ response = client.chat.completions.create(
 print(f"Response: {response.choices[0].message.content}")
 ```
 
-### Check Pinecone Connection
-
-```python
-# scripts/test_pinecone.py
-import os
-from pinecone import Pinecone
-from dotenv import load_dotenv
-
-load_dotenv()
-
-pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
-index = pc.Index(os.environ["PINECONE_INDEX_NAME"])
-
-stats = index.describe_index_stats()
-print(f"Pinecone index stats: {stats}")
-```
-
 ## Troubleshooting
 
 ### "Invalid token" Error
@@ -359,6 +267,10 @@ print(f"Pinecone index stats: {stats}")
 - Check Docker containers are running: `docker-compose ps`
 - Verify `DATABASE_URL` format is correct
 - Try connecting manually with psql
+
+### pgvector Extension Missing
+- Use `pgvector/pgvector:pg16` Docker image
+- Or run: `CREATE EXTENSION IF NOT EXISTS vector;`
 
 ### Embeddings Failing
 - Verify `OPENAI_API_KEY` is valid

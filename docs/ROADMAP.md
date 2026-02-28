@@ -5,221 +5,108 @@
 **Total MVP Duration: 4-6 weeks** (with AI assistance)
 
 ```
-Week 1: Foundation
-Week 2: Data Pipeline
-Week 3: Core AI Logic
-Week 4: Feedback System
-Week 5: Polish & Safety
-Week 6: Production Ready
+Week 1: Foundation          ✅ COMPLETE
+Week 2: Data Pipeline       ✅ COMPLETE
+Week 3: Core AI Logic       ✅ COMPLETE
+Week 4: Feedback System     ✅ COMPLETE
+Week 5: Polish & Safety     ✅ COMPLETE
+Week 6: Production Ready    ✅ COMPLETE
 ```
 
-## Phase 1: Foundation (Week 1)
+## Phase 1: Foundation (Week 1) - COMPLETE
 
-### Goals
-- Slack app created and installable
-- Basic message handling working
-- Database set up
+### Deliverables
+- [x] Slack app created in api.slack.com
+- [x] Socket Mode enabled (local dev)
+- [x] HTTP Mode enabled (production)
+- [x] OAuth flow implemented (multi-workspace)
+- [x] Bot responds to DMs
+- [x] PostgreSQL running (local Docker + AWS RDS)
+- [x] Workspace table created
+- [x] Onboarding modal (decision-maker selection + channel selection)
 
-### Day-by-Day
+## Phase 2: Data Pipeline (Week 2) - COMPLETE
 
-| Day | Tasks | Deliverables |
-|-----|-------|--------------|
-| **Day 1** | Create Slack workspace & app | App ID, tokens generated |
-| | Set up Python project | Project structure, requirements.txt |
-| | Configure Socket Mode | Local dev environment working |
-| **Day 2** | Implement OAuth flow | Decision-maker can install bot |
-| | Store tokens in DB | Workspace record created |
-| **Day 3** | Set up PostgreSQL | Local Docker, schema migrated |
-| | Set up Pinecone index | Vector DB index created |
-| **Day 4** | Basic DM handler | Bot receives messages |
-| | Echo response | Bot replies to DMs |
-| **Day 5** | Testing & debugging | All Day 1-4 features stable |
+### Deliverables
+- [x] All decision-maker channels fetched
+- [x] Message history paginated correctly
+- [x] Q&A pair preservation (thread replies include parent question)
+- [x] Channel context metadata ([#channel-name] prefix)
+- [x] Chunking produces ~1000 char segments
+- [x] Embeddings stored in pgvector
+- [x] Vector search returns relevant results with similarity threshold
+- [x] Time-weighted scoring (recent messages prioritized)
+- [x] Background ingestion working (Celery)
+- [x] Welcome message sent after completion
+- [x] Incremental ingestion (`/slough-ingest`)
 
-### Checklist
-- [ ] Slack app created in api.slack.com
-- [ ] Socket Mode enabled
-- [ ] OAuth flow implemented
-- [ ] Bot responds to DMs
-- [ ] PostgreSQL running locally
-- [ ] Workspace table created
+## Phase 3: Core AI Logic (Week 3) - COMPLETE
 
-## Phase 2: Data Pipeline (Week 2)
+### Deliverables
+- [x] LangGraph RAG pipeline (check_rules -> check_safety -> retrieve -> generate)
+- [x] Persona auto-extraction (GPT-4o-mini, 50 sample messages, Redis cache)
+- [x] CEO name injection ("당신은 {name}의 AI 분신입니다")
+- [x] Self-identity rules (never say "CEO 정보를 모릅니다")
+- [x] 3-layer conversation memory (checkpoint + summary + sliding window)
+- [x] Answer priority system (rules > context > persona inference > fallback)
+- [x] Korean output tuning
+- [x] Block Kit formatting with disclaimer
+- [x] Review button attached
+- [x] Streaming support
 
-### Goals
-- Ingest decision-maker's Slack history
-- Generate and store embeddings
-- Vector search working
+## Phase 4: Feedback System (Week 4) - COMPLETE
 
-### Day-by-Day
+### Deliverables
+- [x] [검토 요청] creates review record
+- [x] Decision-maker receives notification with 4 buttons
+- [x] All 4 feedback buttons work (승인/틀림/수정/주의)
+- [x] Employee gets feedback notification
+- [x] Edit modal opens and submits
+- [x] Corrected answers stored as new embeddings
+- [x] Button value 2000 char limit handled (fetch answer from DB)
 
-| Day | Tasks | Deliverables |
-|-----|-------|--------------|
-| **Day 1** | List decision-maker's channels | conversations.list working |
-| | Paginated history fetch | conversations.history with cursor |
-| **Day 2** | Filter decision-maker messages | Extract decision-maker-only messages |
-| | Handle threads | Include thread context |
-| **Day 3** | Chunking logic | Messages split into ~500 token chunks |
-| | OpenAI embedding calls | Embeddings generated |
-| **Day 4** | Store in Pinecone | Embeddings upserted with metadata |
-| | Build search function | Vector similarity query working |
-| **Day 5** | Background job queue | Ingestion runs async via Celery |
-| | Progress tracking | Onboarding status tracked |
+## Phase 5: Polish & Safety (Week 5) - COMPLETE
 
-### Checklist
-- [ ] All decision-maker channels fetched
-- [ ] Message history paginated correctly
-- [ ] Chunking produces reasonable segments
-- [ ] Embeddings stored in Pinecone
-- [ ] Vector search returns relevant results
-- [ ] Background ingestion working
-- [ ] Welcome message sent after completion
+### Deliverables
+- [x] `/slough-rule add` works
+- [x] `/slough-rule list` works
+- [x] `/slough-rule delete` works
+- [x] Rules are applied in answer generation (with precedence)
+- [x] High-risk keywords trigger warning
+- [x] Prohibited domains handled correctly
+- [x] Weekly report generates (Celery Beat)
+- [x] Report sent on schedule (Monday 10 AM KST)
 
-## Phase 3: Core AI Logic (Week 3)
+## Phase 6: Production Ready (Week 6) - COMPLETE
 
-### Goals
-- RAG retrieval working
-- Decision-maker persona prompting
-- Formatted responses
+### Deliverables
+- [x] AWS ECS Fargate deployment (3 services: app, worker, beat)
+- [x] RDS PostgreSQL + pgvector
+- [x] ElastiCache Redis
+- [x] CloudFront HTTPS termination
+- [x] ALB routing
+- [x] CloudWatch logging
+- [x] GitHub Actions CI/CD
+- [x] CloudFormation infrastructure-as-code
+- [x] Multi-workspace Slack app (public distribution)
+- [x] App uninstall handling
 
-### Day-by-Day
+## Post-MVP Improvements
 
-| Day | Tasks | Deliverables |
-|-----|-------|--------------|
-| **Day 1** | RAG retrieval | Fetch top-k relevant chunks |
-| | Reranking/filtering | Remove duplicates, boost recency |
-| **Day 2** | Decision-maker persona prompt | System prompt designed |
-| | OpenAI GPT-4o integration | Answer generation working |
-| **Day 3** | Korean output tuning | Natural Korean responses |
-| | Response quality testing | Answers match decision-maker style |
-| **Day 4** | Block Kit formatting | Messages have proper structure |
-| | Add disclaimer | Warning text included |
-| | Add review button | [검토 요청] button working |
-| **Day 5** | Response time optimization | < 10 second responses |
-| | Error handling | Graceful failures |
+### Known Issues to Address
+- [ ] Completion DM fails for bot decision-makers (`cannot_dm_bot`)
+- [ ] Admin should also receive notifications (not just decision-maker)
+- [ ] Ingestion deduplication (re-ingestion can create duplicate embeddings)
+- [ ] AI answer quality depends on data volume (need more data for better persona)
 
-### Checklist
-- [ ] RAG retrieves relevant context
-- [ ] Decision-maker persona prompt crafted
-- [ ] Answers are in natural Korean
-- [ ] Block Kit formatting correct
-- [ ] Disclaimer always present
-- [ ] Review button attached
-- [ ] Response time < 10 seconds
-
-## Phase 4: Feedback System (Week 4)
-
-### Goals
-- Review request flow complete
-- Decision-maker feedback buttons working
-- Learning data stored
-
-### Day-by-Day
-
-| Day | Tasks | Deliverables |
-|-----|-------|--------------|
-| **Day 1** | Review request action | Button click captured |
-| | QA record creation | Question/answer saved |
-| **Day 2** | Decision-maker notification | Review request DM sent |
-| | Feedback buttons | All 4 buttons rendered |
-| **Day 3** | "문제 없음" handler | Positive feedback saved |
-| | "틀림" handler | Negative feedback saved |
-| | Employee notifications | Status messages sent |
-| **Day 4** | "직접 수정" modal | Modal opens, captures edit |
-| | Corrected answer delivery | Employee receives correction |
-| **Day 5** | "주의 필요" handler | Caution flag saved |
-| | Feedback integration | Learning data affects future answers |
-
-### Checklist
-- [ ] [검토 요청] creates review record
-- [ ] Decision-maker receives notification
-- [ ] All 4 feedback buttons work
-- [ ] Employee gets feedback notification
-- [ ] Edit modal opens and submits
-- [ ] Learning data stored correctly
-
-## Phase 5: Polish & Safety (Week 5)
-
-### Goals
-- Rule system working
-- High-risk detection
-- Weekly reminder
-
-### Day-by-Day
-
-| Day | Tasks | Deliverables |
-|-----|-------|--------------|
-| **Day 1** | `/rule add` command | Rules saved to DB |
-| | `/rule list` command | Rules displayed |
-| | `/rule delete` command | Rules removed |
-| **Day 2** | Rule matching logic | Rules checked before answering |
-| | Rule actions | Rule triggers appropriate action |
-| **Day 3** | High-risk keyword list | Korean keywords defined |
-| | Keyword detection | Warning added when detected |
-| | Prohibited domain handling | Explicit refusal for out-of-scope topics |
-| **Day 4** | Weekly stats aggregation | Stats calculated correctly |
-| | Scheduler setup (Celery Beat) | Cron job for Monday 10 AM |
-| | Report message | Formatted report sent |
-| **Day 5** | Edge case handling | Unusual inputs handled |
-| | Error recovery | System recovers from failures |
-
-### Checklist
-- [ ] `/rule add` works
-- [ ] `/rule list` works
-- [ ] `/rule delete` works
-- [ ] Rules are applied in answer generation (with precedence over learned patterns)
-- [ ] High-risk keywords trigger warning
-- [ ] Prohibited domains handled correctly
-- [ ] Weekly report generates
-- [ ] Report sent on schedule
-
-## Phase 6: Production Ready (Week 6)
-
-### Goals
-- Production deployment
-- Monitoring set up
-- Beta launch ready
-
-### Day-by-Day
-
-| Day | Tasks | Deliverables |
-|-----|-------|--------------|
-| **Day 1** | Environment configuration | Staging & production envs |
-| | Secrets management | Secure token storage |
-| **Day 2** | Production database (RDS) | Cloud DB provisioned |
-| | Deployment pipeline (ECS Fargate) | CI/CD configured |
-| **Day 3** | Error tracking | Sentry integration |
-| | Logging | Structured logging (structlog) |
-| **Day 4** | Load testing | System handles expected load |
-| | Security review | No obvious vulnerabilities |
-| **Day 5** | Documentation review | README, setup guide complete |
-| | Beta user preparation | First customers identified |
-
-### Checklist
-- [ ] Staging environment working
-- [ ] Production environment working
-- [ ] CI/CD deploying correctly
-- [ ] Monitoring active
-- [ ] Error tracking working
-- [ ] Security review passed
-- [ ] Documentation complete
-- [ ] Ready for beta users
-
-## Post-MVP Features (Future)
-
-### Phase 7: Improvements (Week 7-8)
-- Feedback mode (decision-maker reviews all conversations)
-- Answer quality metrics
-- User analytics dashboard
-
-### Phase 8: Scale (Week 9-12)
-- Multi-workspace efficiency
-- Cost optimization
-- Slack App Directory submission
-
-### Phase 9: Growth (Month 3+)
-- Channel mention support
-- Team hierarchy support
-- Integration with other tools
+### Future Features
+- [ ] Answer quality metrics and analytics dashboard
+- [ ] GPT-4o-mini routing for simple questions (cost optimization)
+- [ ] Response caching for frequently asked questions
+- [ ] Channel mention support (@bot in channels)
+- [ ] Multi-language support
+- [ ] User analytics dashboard
+- [ ] Slack App Directory submission
 
 ## Risk Mitigation
 
@@ -227,10 +114,10 @@ Week 6: Production Ready
 
 | Risk | Mitigation |
 |------|------------|
-| LLM response quality | Extensive prompt testing, feedback loop |
-| Slack API rate limits | Queue system, backoff strategy |
-| Data ingestion failures | Retry logic, partial completion |
-| Response latency | Caching, model selection |
+| LLM response quality | Persona extraction, similarity threshold, feedback loop |
+| Slack API rate limits | Queue system, backoff strategy, 0.5s delay between pages |
+| Data ingestion failures | Retry logic, incremental ingestion, job tracking |
+| Response latency | Streaming support, caching strategy |
 
 ### Business Risks
 
@@ -251,18 +138,3 @@ Week 6: Production Ready
 | Decision-maker satisfaction (beta) | > 4/5 rating |
 | Employee satisfaction | > 3.5/5 rating |
 | System uptime | > 99% |
-
-## Using This Roadmap with Claude CLI
-
-When working with Claude CLI:
-
-1. Reference this roadmap for current phase context
-2. Check off completed items as you go
-3. Update estimates based on actual progress
-4. Document blockers and solutions
-
-```bash
-# Example: Starting Phase 1 Day 1
-claude "I'm starting Phase 1 Day 1 of the Slough.ai roadmap.
-Help me create the Slack app and set up the Python project."
-```

@@ -13,8 +13,9 @@
 
 | 기능 | 설명 |
 |------|------|
-| 온보딩 & 학습 | OAuth 설치 → 채널 선택 → 대화 기록 수집 |
+| 온보딩 & 학습 | OAuth 설치 → 채널 선택 → 대화 기록 수집 → 페르소나 자동 추출 |
 | Q&A | 팀원이 DM으로 질문 → AI가 의사결정자 스타일로 답변 |
+| 증분 학습 | `/slough-ingest`로 새 메시지만 추가 학습 |
 | 피드백 루프 | 검토 요청 → 의사결정자 피드백 (승인/수정/주의) |
 | 안전장치 | AI 면책, 고위험 키워드 감지, 금지 도메인 차단 |
 | 규칙 선언 | `/slough-rule`로 명시적 규칙 등록 (학습보다 우선) |
@@ -29,13 +30,91 @@
 | 언어 | Python 3.12 |
 | 웹 프레임워크 | FastAPI |
 | Slack SDK | Slack Bolt for Python |
-| LLM | OpenAI GPT-4o (팀원 담당) |
-| 임베딩 | OpenAI text-embedding-3-small (팀원 담당) |
-| 벡터 DB | pgvector (PostgreSQL 확장) |
-| RDBMS | PostgreSQL |
-| 작업 큐 | Celery + Redis |
+| AI 파이프라인 | LangGraph (RAG + 페르소나) |
+| LLM | OpenAI GPT-4o |
+| 임베딩 | OpenAI text-embedding-3-small (1536차원) |
+| 벡터 검색 | pgvector (PostgreSQL 확장) |
+| RDBMS | PostgreSQL (AWS RDS) |
+| 캐시/큐 | Redis (AWS ElastiCache) + Celery |
+| 배포 | AWS ECS Fargate (3-서비스) |
+| CI/CD | GitHub Actions |
+| CDN/HTTPS | AWS CloudFront + ALB |
 | 패키지 관리 | uv |
-| 배포 | Railway (web / worker / beat 3-서비스) |
+
+---
+
+## 아키텍처
+
+```
+┌─────────────┐     HTTPS (CloudFront)       ┌──────────────────────┐
+│  Slack API  │ ──────────────────────────→   │  slough-app          │
+│             │ ←──────────────────────────   │  (FastAPI + Bolt)    │
+└─────────────┘     JSON response            │                      │
+                                             │  - 이벤트/커맨드 처리  │
+                                             │  - OAuth 설치         │
+                                             │  - 헬스체크           │
+                                             └──────┬───────────────┘
+                                                    │ Celery task
+                                                    ▼
+┌──────────────┐                            ┌──────────────────────┐
+│  PostgreSQL  │ ←─────────────────────────→ │  slough-worker       │
+│  (RDS)       │                            │  (Celery worker)     │
+│  + pgvector  │                            │                      │
+└──────────────┘                            │  - 데이터 수집         │
+                                            │  - AI 파이프라인 호출  │
+┌──────────────┐                            │  - 페르소나 추출       │
+│  Redis       │ ←── 작업 큐 + 캐시 ──→      └──────────────────────┘
+│ (ElastiCache)│
+└──────────────┘                            ┌──────────────────────┐
+                                            │  slough-beat         │
+                                            │  (Celery scheduler)  │
+                                            │  - 주간 리포트 스케줄  │
+                                            └──────────────────────┘
+```
+
+**운영 모드:**
+- **프로덕션 (AWS):** HTTP 모드 — CloudFront → ALB → ECS Fargate
+- **로컬 개발:** Socket Mode — WebSocket으로 연결 (공개 URL 불필요)
+
+---
+
+## AI 파이프라인 (LangGraph)
+
+### 그래프 구조
+
+```
+질문 입력
+    │
+    ▼
+┌─────────────┐
+│ check_rules │ ──── 규칙 매칭? ──→ 규칙 적용 답변 → END
+└──────┬──────┘
+       │ No match
+       ▼
+┌──────────────┐
+│ check_safety │ ──── 금지 도메인? ──→ refuse_answer → END
+└──────┬───────┘
+       │ Safe
+       ▼
+┌──────────────┐
+│   retrieve   │ ──── pgvector 유사도 검색 (threshold=0.5, 시간 가중치)
+└──────┬───────┘
+       │
+       ▼
+┌──────────────┐
+│   generate   │ ──── GPT-4o + 페르소나 프롬프트 + 3-layer 메모리
+└──────────────┘
+```
+
+### 주요 특징
+
+- **유사도 임계값 (0.5):** 관련 없는 문서 필터링
+- **시간 가중치 검색:** 최신 메시지를 우선 반영 (`1 / (1 + 0.1 * ln(age_days + 1))`)
+- **페르소나 자동 추출:** GPT-4o-mini가 50개 샘플 메시지 분석 → 말투/성격/의사결정 스타일 프로필 생성
+- **CEO 이름 주입:** Slack에서 의사결정자 이름 조회 → "당신은 {name}의 AI 분신입니다"
+- **3-layer 메모리:** PostgresSaver 체크포인트 + GPT-4o-mini 요약 + 슬라이딩 윈도우 (2 Q&A 쌍)
+- **Q&A 쌍 보존:** 스레드 답변 시 부모 질문을 `[질문]...[답변]...` 형태로 함께 학습
+- **채널 맥락:** 메시지에 `[#channel-name]` 접두사 추가
 
 ---
 
@@ -45,8 +124,13 @@
 slough-ai/
 ├── entrypoint.py                  # SERVICE_TYPE 기반 프로세스 라우팅
 ├── requirements.txt
-├── railway.toml                   # Railway 배포 설정
-├── Procfile                       # 프로세스 정의 (web/worker/beat)
+├── Dockerfile
+│
+├── .github/workflows/
+│   └── deploy.yml                 # GitHub Actions 배포 워크플로우
+│
+├── infra/
+│   └── cloudformation.yaml        # AWS 인프라 정의
 │
 ├── src/
 │   ├── app.py                     # Bolt 앱 초기화 + 핸들러 등록 + 진입점
@@ -64,6 +148,7 @@ slough-ai/
 │   │   │   └── review_request.py  # 검토 요청 버튼
 │   │   ├── commands/
 │   │   │   ├── rule.py            # /slough-rule (규칙 관리)
+│   │   │   ├── ingest.py          # /slough-ingest (증분 학습)
 │   │   │   ├── stats.py           # /slough-stats (통계)
 │   │   │   └── help.py            # /slough-help
 │   │   └── views/
@@ -71,21 +156,31 @@ slough-ai/
 │   │       └── onboarding.py      # 온보딩 모달 제출 처리
 │   │
 │   ├── services/
-│   │   ├── ai/                    # ★ AI 파이프라인 (아래 상세 설명)
-│   │   │   └── __init__.py        # 인터페이스 + 스텁
+│   │   ├── ai/                    # AI 파이프라인 (LangGraph)
+│   │   │   ├── __init__.py        # 인터페이스 (generate_answer, ingest_messages, process_feedback)
+│   │   │   ├── graph.py           # LangGraph 그래프 정의
+│   │   │   ├── nodes.py           # 그래프 노드 (check_rules, check_safety, retrieve, generate, refuse)
+│   │   │   ├── state.py           # AgentState 정의
+│   │   │   ├── persona.py         # 페르소나 시스템 프롬프트 구성
+│   │   │   ├── persona_extractor.py # GPT-4o-mini 페르소나 자동 추출
+│   │   │   ├── memory.py          # 3-layer 대화 메모리 관리
+│   │   │   ├── vector_store.py    # pgvector 유사도 검색 + 시간 가중치
+│   │   │   ├── embeddings.py      # OpenAI 임베딩 생성
+│   │   │   └── chunking.py        # 메시지 청킹 로직
 │   │   ├── slack/
-│   │   │   ├── conversations.py   # Slack 대화 기록 가져오기
+│   │   │   ├── conversations.py   # Slack 대화 기록 가져오기 (Q&A 쌍 보존)
 │   │   │   └── oauth.py           # OAuth 설치 플로우
 │   │   ├── db/
 │   │   │   ├── connection.py      # SQLAlchemy 엔진/세션
-│   │   │   ├── models.py          # ORM 모델 (5개 테이블)
+│   │   │   ├── models.py          # ORM 모델 (6개 테이블)
 │   │   │   ├── workspaces.py      # 워크스페이스 CRUD
 │   │   │   ├── rules.py           # 규칙 CRUD
 │   │   │   ├── qa_history.py      # Q&A 기록 CRUD
 │   │   │   ├── weekly_stats.py    # 주간 통계
 │   │   │   └── ingestion_jobs.py  # 수집 작업 추적
-│   │   └── ingestion/
-│   │       └── ingest.py          # 수집 오케스트레이터
+│   │   ├── ingestion/
+│   │   │   └── ingest.py          # 수집 오케스트레이터 (초기 + 증분)
+│   │   └── redis_client.py        # Redis 멀티-DB 클라이언트 + 캐시 헬퍼
 │   │
 │   ├── tasks/                     # Celery 비동기 작업
 │   │   ├── ingestion.py           # 백그라운드 데이터 수집
@@ -101,186 +196,6 @@ slough-ai/
 ├── tests/                         # 테스트
 ├── scripts/                       # 유틸리티 스크립트
 └── docs/                          # 상세 문서
-```
-
----
-
-## 아키텍처
-
-```
-┌─────────────┐     POST /slack/events      ┌──────────────────────┐
-│  Slack API  │ ──────────────────────────→  │  slough-web          │
-│             │ ←──────────────────────────  │  (FastAPI + Bolt)    │
-└─────────────┘     JSON response           │                      │
-                                            │  - 이벤트/커맨드 처리  │
-                                            │  - OAuth 설치         │
-                                            │  - 헬스체크           │
-                                            └──────┬───────────────┘
-                                                   │ Celery task
-                                                   ▼
-┌──────────────┐                           ┌──────────────────────┐
-│  PostgreSQL  │ ←────────────────────────→ │  slough-worker       │
-│  (워크스페이스, │                           │  (Celery worker)     │
-│   규칙, Q&A) │                           │                      │
-└──────────────┘                           │  - 데이터 수집         │
-                                           │  - AI 파이프라인 호출  │
-┌──────────────┐                           └──────────────────────┘
-│  Redis       │ ←── 작업 큐 ──→
-└──────────────┘                           ┌──────────────────────┐
-                                           │  slough-beat         │
-┌──────────────┐                           │  (Celery scheduler)  │
-│  Pinecone    │ ←── 임베딩 저장/검색 ──→    │                      │
-│  (벡터 DB)   │                           │  - 주간 리포트 스케줄  │
-└──────────────┘                           └──────────────────────┘
-```
-
-**운영 모드:**
-- **프로덕션 (Railway):** HTTP 모드 — Slack이 POST /slack/events로 이벤트 전송
-- **로컬 개발:** Socket Mode — WebSocket으로 연결 (공개 URL 불필요)
-
----
-
-## AI 파이프라인 통합 가이드 (팀원용)
-
-### 현재 상태
-
-`src/services/ai/__init__.py`에 **스텁(stub)**이 구현되어 있습니다. 3개의 함수가 정의되어 있으며, 현재는 더미 응답을 반환합니다. 이 파일의 실제 구현을 추가하면 됩니다.
-
-### 구현해야 할 함수 3개
-
-#### 1. `generate_answer()` — 질문 → 답변 생성
-
-```python
-async def generate_answer(
-    question: str,          # 팀원의 질문 텍스트
-    workspace_id: str,      # 워크스페이스 UUID
-    asker_id: str,          # 질문자의 Slack user ID
-    rules: list[dict],      # 활성 규칙 [{"id": int, "rule_text": str}]
-) -> AnswerResult:
-    """
-    RAG + 페르소나 기반 답변 생성.
-
-    호출 시점: 팀원이 봇에게 DM을 보낼 때
-    호출 위치: src/handlers/events/message.py (line 80)
-
-    구현 방향:
-    1. question을 임베딩하여 pgvector에서 유사 대화 검색
-    2. rules가 있으면 프롬프트에 규칙을 우선 반영
-    3. 의사결정자 페르소나 프롬프트 + 검색된 컨텍스트로 GPT-4o 호출
-    4. 금지 도메인이면 is_prohibited=True 반환
-    5. 고위험 키워드면 is_high_risk=True 반환
-
-    반환값:
-    - answer: 한국어 답변 텍스트
-    - is_high_risk: 민감 주제 여부
-    - is_prohibited: 금지 도메인 여부
-    - sources_used: 참고한 소스 수
-    """
-```
-
-#### 2. `ingest_messages()` — 대화 수집 → 임베딩 저장
-
-```python
-async def ingest_messages(
-    workspace_id: str,      # 워크스페이스 UUID
-    messages: list[dict],   # [{"text": str, "channel": str, "ts": str, "thread_ts"?: str}]
-) -> IngestResult:
-    """
-    의사결정자의 메시지를 청킹 → 임베딩 → Pinecone 저장.
-
-    호출 시점: 온보딩 완료 후 (Celery 백그라운드 작업)
-    호출 위치: src/services/ingestion/ingest.py
-
-    구현 방향:
-    1. messages를 의미 단위로 청킹
-    2. 각 청크를 text-embedding-3-small로 임베딩
-    3. pgvector embeddings 테이블에 workspace_id로 저장
-    4. 메타데이터: channel, ts, thread_ts 포함
-
-    반환값:
-    - chunks_created: 생성된 청크 수
-    - embeddings_stored: 저장된 임베딩 수
-    """
-```
-
-#### 3. `process_feedback()` — 피드백 반영
-
-```python
-async def process_feedback(
-    workspace_id: str,              # 워크스페이스 UUID
-    question_id: str,               # qa_history의 UUID
-    feedback_type: str,             # 'approved' | 'rejected' | 'corrected' | 'caution'
-    corrected_answer: str | None,   # 'corrected' 타입일 때만
-) -> None:
-    """
-    의사결정자 피드백을 학습 데이터에 반영.
-
-    호출 시점: 의사결정자가 피드백 버튼 클릭 시
-    호출 위치: src/handlers/actions/feedback.py
-
-    구현 방향:
-    - approved: 답변 품질 양호 → 해당 컨텍스트 가중치 강화
-    - rejected: 답변 부정확 → 해당 컨텍스트 가중치 약화
-    - corrected: 수정 답변을 새로운 학습 데이터로 추가
-    - caution: 주의 필요 플래그 설정
-    """
-```
-
-### 데이터 흐름 요약
-
-```
-[팀원 DM] → message.py → generate_answer() → [AI 답변 반환]
-                              ↓
-                    pgvector 검색 + GPT-4o 생성
-
-[온보딩]   → onboarding.py → Celery task → ingest.py → ingest_messages()
-                                                ↓
-                                      청킹 → 임베딩 → pgvector 저장
-
-[피드백]   → feedback.py → process_feedback() → [학습 데이터 갱신]
-```
-
-### 파일 추가 가이드
-
-AI 코드는 `src/services/ai/` 디렉토리 안에 작성합니다:
-
-```
-src/services/ai/
-├── __init__.py          # 인터페이스 (수정 — 스텁을 실제 구현으로 교체)
-├── embeddings.py        # OpenAI 임베딩 생성 (새로 작성)
-├── vector_search.py     # pgvector 검색 (새로 작성)
-├── generation.py        # GPT-4o 답변 생성 (새로 작성)
-├── persona.py           # 페르소나 프롬프트 구성 (새로 작성)
-└── chunking.py          # 메시지 청킹 로직 (새로 작성)
-```
-
-`__init__.py`의 3개 함수만 올바르게 동작하면 Slack 쪽 코드는 수정할 필요가 없습니다.
-
-### 필요한 환경변수
-
-```env
-OPENAI_API_KEY=sk-...              # GPT-4o + 임베딩
-DATABASE_URL=postgresql://...      # pgvector가 활성화된 PostgreSQL
-```
-
-벡터 저장소는 별도 서비스 없이 기존 PostgreSQL에 pgvector 확장으로 통합됩니다.
-Railway에서는 pgvector 템플릿으로 Postgres를 배포해야 합니다.
-
-### 규칙 우선순위
-
-`rules` 파라미터에 활성 규칙이 전달됩니다. 프롬프트 구성 시 **규칙이 학습 패턴보다 우선**하도록 설계해야 합니다.
-
-```python
-# 예시: 프롬프트 구성
-system_prompt = f"""
-당신은 의사결정자의 사고 방식을 반영하여 답변합니다.
-
-[필수 규칙 - 반드시 준수]
-{chr(10).join(f'- {r["rule_text"]}' for r in rules)}
-
-[학습된 패턴]
-{retrieved_context}
-"""
 ```
 
 ---
@@ -314,22 +229,29 @@ PYTHONPATH=. uv run celery -A src.worker worker --loglevel=info --concurrency=2
 PYTHONPATH=. uv run celery -A src.worker beat --loglevel=info
 ```
 
-## 배포 (Railway)
+## 배포 (AWS ECS Fargate)
 
-3개 서비스가 같은 코드베이스에서 `SERVICE_TYPE` 환경변수로 분기합니다:
+3개 서비스가 같은 Docker 이미지에서 `SERVICE_TYPE` 환경변수로 분기합니다:
 
 | 서비스 | SERVICE_TYPE | 역할 |
 |--------|-------------|------|
-| slough-web | `web` | FastAPI + Bolt (HTTP 모드) |
+| slough-app | `web` | FastAPI + Bolt (HTTP 모드) |
 | slough-worker | `worker` | Celery 작업 처리 |
 | slough-beat | `beat` | Celery 스케줄러 |
 
-```bash
-# 배포
-railway up --service slough-web
-railway up --service slough-worker
-railway up --service slough-beat
-```
+### AWS 인프라 구성
+
+| 서비스 | AWS 리소스 |
+|--------|-----------|
+| 컴퓨팅 | ECS Fargate (3 서비스) |
+| 데이터베이스 | RDS PostgreSQL + pgvector |
+| 캐시/큐 | ElastiCache Redis |
+| 로드밸런서 | ALB |
+| CDN/HTTPS | CloudFront |
+| 로깅 | CloudWatch |
+| CI/CD | GitHub Actions → ECR → ECS |
+
+배포는 `main` 브랜치에 push하면 GitHub Actions가 자동 실행합니다.
 
 ## DB 스키마
 
