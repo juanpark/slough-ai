@@ -38,6 +38,7 @@ from src.handlers.events import uninstall as uninstall_handler
 from src.handlers.commands import rule as rule_handler
 from src.handlers.commands import stats as stats_handler
 from src.handlers.commands import help as help_handler
+from src.handlers.commands import ingest as ingest_handler
 from src.handlers.actions import review_request as review_request_handler
 from src.handlers.actions import feedback as feedback_handler
 from src.handlers.actions import onboarding as onboarding_handler
@@ -49,6 +50,7 @@ uninstall_handler.register(app)
 rule_handler.register(app)
 stats_handler.register(app)
 help_handler.register(app)
+ingest_handler.register(app)
 review_request_handler.register(app)
 feedback_handler.register(app)
 onboarding_handler.register(app)

@@ -29,18 +29,20 @@ logger = logging.getLogger(__name__)
 _BATCH_SIZE = 100
 
 
-def run_ingestion(team_id: str, channel_ids: list[str] | None = None) -> None:
+def run_ingestion(team_id: str, channel_ids: list[str] | None = None, incremental: bool = False) -> None:
     """Run the full ingestion pipeline for a workspace.
 
     1. Look up workspace and create a job record
     2. Resolve channels (user-selected or all bot channels)
     3. Fetch decision-maker messages from each channel
     4. Pass messages to AI pipeline in batches
-    5. Mark job complete and notify decision-maker
+    5. Mark job complete, extract persona, and notify decision-maker
 
     Args:
         team_id: Slack team ID of the workspace to ingest.
         channel_ids: Specific channel IDs to ingest. If None, all bot channels.
+        incremental: If True, only fetch messages since the last successful
+                     ingestion (avoids duplicates).
     """
     # 1. Look up workspace
     with get_db() as db:
@@ -52,6 +54,18 @@ def run_ingestion(team_id: str, channel_ids: list[str] | None = None) -> None:
         workspace_id = workspace.id
         bot_token = workspace.bot_token
         decision_maker_id = workspace.decision_maker_id
+
+        # Determine oldest timestamp for incremental ingestion
+        oldest = 0
+        if incremental:
+            from src.services.db.ingestion_jobs import get_latest_job as _get_latest
+            latest = _get_latest(db, workspace_id)
+            if latest and latest.status == "completed" and latest.completed_at:
+                oldest = latest.completed_at.timestamp()
+                logger.info(
+                    "Incremental ingestion: fetching messages after %s",
+                    latest.completed_at.isoformat(),
+                )
 
         # Create job record
         job = create_ingestion_job(db, workspace_id=workspace_id)
@@ -105,6 +119,8 @@ def run_ingestion(team_id: str, channel_ids: list[str] | None = None) -> None:
                 client,
                 channel_id=ch["id"],
                 decision_maker_id=decision_maker_id,
+                oldest=oldest,
+                channel_name=ch["name"],
             )
             all_messages.extend(msgs)
         except Exception:
@@ -154,6 +170,14 @@ def run_ingestion(team_id: str, channel_ids: list[str] | None = None) -> None:
     with get_db() as db:
         mark_job_completed(db, job_id, total_messages=total_messages, processed_messages=processed)
         update_workspace(db, workspace_id, onboarding_completed=True)
+
+    # 6. Extract persona from ingested messages
+    try:
+        from src.services.ai.persona_extractor import extract_persona
+        extract_persona(str(workspace_id))
+        logger.info("Persona extracted after ingestion for workspace %s", workspace_id)
+    except Exception:
+        logger.exception("Persona extraction failed after ingestion for workspace %s", workspace_id)
 
     _notify_completion(client, decision_maker_id, total_messages, channels_processed)
 
