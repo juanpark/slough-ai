@@ -25,6 +25,48 @@ logger = logging.getLogger(__name__)
 _llm: Optional[ChatOpenAI] = None
 
 
+def _get_decision_maker_name(workspace_id: str) -> str:
+    """Look up the decision-maker's display name, cached in Redis.
+
+    Falls back to empty string if anything fails.
+    """
+    from src.services.redis_client import RedisManager
+
+    cache_key = f"dm_name:{workspace_id}"
+    cache = RedisManager.get_cache()
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
+
+    try:
+        import uuid as _uuid
+        from src.services.db import get_db
+        from src.services.db.models import Workspace
+        from slack_sdk import WebClient
+
+        with get_db() as db:
+            ws = db.query(Workspace).filter(
+                Workspace.id == _uuid.UUID(workspace_id)
+            ).first()
+            if not ws or not ws.decision_maker_id or not ws.bot_token:
+                return ""
+
+            client = WebClient(token=ws.bot_token)
+            resp = client.users_info(user=ws.decision_maker_id)
+            name = (
+                resp["user"].get("real_name")
+                or resp["user"].get("profile", {}).get("display_name")
+                or resp["user"].get("name", "")
+            )
+
+        if name:
+            cache.set(cache_key, name, ex=86400)  # cache 24h
+        return name
+    except Exception:
+        logger.debug("Failed to look up decision-maker name for %s", workspace_id)
+        return ""
+
+
 def _get_llm() -> ChatOpenAI:
     """Return a singleton ChatOpenAI (GPT-4o) instance."""
     global _llm
@@ -142,7 +184,15 @@ async def generate(state: AgentState) -> dict:
     workspace_id = state.get("workspace_id", "")
 
     persona = get_persona_profile(workspace_id) if workspace_id else ""
-    system_prompt = build_system_prompt(rules, context, persona=persona)
+
+    # Look up decision-maker name for self-identity in prompt
+    dm_name = ""
+    if workspace_id:
+        dm_name = _get_decision_maker_name(workspace_id)
+
+    system_prompt = build_system_prompt(
+        rules, context, persona=persona, decision_maker_name=dm_name,
+    )
 
     # Trim conversation history for token efficiency
     raw_messages = state.get("messages", [])
