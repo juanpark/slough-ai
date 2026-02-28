@@ -18,7 +18,6 @@ jobs:
   deploy:
     name: Build & Deploy
     runs-on: ubuntu-latest
-    if: github.repository == 'juanpark/slough-ai'
 
     steps:
       # ---------------------------------------------------------------
