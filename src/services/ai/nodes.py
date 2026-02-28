@@ -15,6 +15,7 @@ from src.services.ai.memory import trim_and_summarize
 from src.services.ai.persona import build_system_prompt
 from src.services.ai.state import AgentState, streaming_callback
 from src.services.ai.vector_store import search_similar
+from src.services.redis_client import get_persona_profile
 from src.utils.keywords import detect_high_risk_keywords
 from src.utils.prohibited import check_prohibited
 
@@ -99,7 +100,7 @@ def check_safety(state: AgentState) -> dict:
 # ── Node: retrieve ───────────────────────────────────────────────────
 
 def retrieve(state: AgentState) -> dict:
-    """Retrieve similar documents from pgvector."""
+    """Retrieve similar documents from pgvector with similarity threshold."""
     workspace_id = state.get("workspace_id", "")
     question = state["question"]
 
@@ -107,7 +108,8 @@ def retrieve(state: AgentState) -> dict:
         docs = search_similar(
             workspace_id=workspace_id,
             query=question,
-            k=3,
+            k=5,
+            threshold=0.5,
         )
         return {
             "context": docs,
@@ -137,8 +139,10 @@ async def generate(state: AgentState) -> dict:
 
     rules = state.get("rules", [])
     context = state.get("context", [])
+    workspace_id = state.get("workspace_id", "")
 
-    system_prompt = build_system_prompt(rules, context)
+    persona = get_persona_profile(workspace_id) if workspace_id else ""
+    system_prompt = build_system_prompt(rules, context, persona=persona)
 
     # Trim conversation history for token efficiency
     raw_messages = state.get("messages", [])
