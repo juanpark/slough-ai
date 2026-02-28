@@ -15,6 +15,7 @@ from src.services.ai.memory import trim_and_summarize
 from src.services.ai.persona import build_system_prompt
 from src.services.ai.state import AgentState, streaming_callback
 from src.services.ai.vector_store import search_similar
+from src.services.redis_client import get_persona_profile
 from src.utils.keywords import detect_high_risk_keywords
 from src.utils.prohibited import check_prohibited
 
@@ -22,6 +23,48 @@ logger = logging.getLogger(__name__)
 
 # Lazy-loaded LLM singleton
 _llm: Optional[ChatOpenAI] = None
+
+
+def _get_decision_maker_name(workspace_id: str) -> str:
+    """Look up the decision-maker's display name, cached in Redis.
+
+    Falls back to empty string if anything fails.
+    """
+    from src.services.redis_client import RedisManager
+
+    cache_key = f"dm_name:{workspace_id}"
+    cache = RedisManager.get_cache()
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
+
+    try:
+        import uuid as _uuid
+        from src.services.db import get_db
+        from src.services.db.models import Workspace
+        from slack_sdk import WebClient
+
+        with get_db() as db:
+            ws = db.query(Workspace).filter(
+                Workspace.id == _uuid.UUID(workspace_id)
+            ).first()
+            if not ws or not ws.decision_maker_id or not ws.bot_token:
+                return ""
+
+            client = WebClient(token=ws.bot_token)
+            resp = client.users_info(user=ws.decision_maker_id)
+            name = (
+                resp["user"].get("real_name")
+                or resp["user"].get("profile", {}).get("display_name")
+                or resp["user"].get("name", "")
+            )
+
+        if name:
+            cache.set(cache_key, name, ex=86400)  # cache 24h
+        return name
+    except Exception:
+        logger.debug("Failed to look up decision-maker name for %s", workspace_id)
+        return ""
 
 
 def _get_llm() -> ChatOpenAI:
@@ -99,7 +142,7 @@ def check_safety(state: AgentState) -> dict:
 # ── Node: retrieve ───────────────────────────────────────────────────
 
 def retrieve(state: AgentState) -> dict:
-    """Retrieve similar documents from pgvector."""
+    """Retrieve similar documents from pgvector with similarity threshold."""
     workspace_id = state.get("workspace_id", "")
     question = state["question"]
 
@@ -107,7 +150,8 @@ def retrieve(state: AgentState) -> dict:
         docs = search_similar(
             workspace_id=workspace_id,
             query=question,
-            k=3,
+            k=5,
+            threshold=0.5,
         )
         return {
             "context": docs,
@@ -137,8 +181,18 @@ async def generate(state: AgentState) -> dict:
 
     rules = state.get("rules", [])
     context = state.get("context", [])
+    workspace_id = state.get("workspace_id", "")
 
-    system_prompt = build_system_prompt(rules, context)
+    persona = get_persona_profile(workspace_id) if workspace_id else ""
+
+    # Look up decision-maker name for self-identity in prompt
+    dm_name = ""
+    if workspace_id:
+        dm_name = _get_decision_maker_name(workspace_id)
+
+    system_prompt = build_system_prompt(
+        rules, context, persona=persona, decision_maker_name=dm_name,
+    )
 
     # Trim conversation history for token efficiency
     raw_messages = state.get("messages", [])

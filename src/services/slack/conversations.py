@@ -66,6 +66,7 @@ def fetch_channel_history(
     decision_maker_id: str,
     oldest: float = 0,
     limit_per_page: int = 200,
+    channel_name: str = "",
 ) -> list[dict]:
     """Fetch all messages from a channel authored by the decision-maker.
 
@@ -78,6 +79,7 @@ def fetch_channel_history(
         decision_maker_id: Slack user ID to filter by.
         oldest: Unix timestamp — only fetch messages after this time. 0 = all history.
         limit_per_page: Messages per API call (max 200).
+        channel_name: Channel name to include as context prefix (e.g. "general").
 
     Returns:
         List of dicts matching the AI contract format:
@@ -115,8 +117,27 @@ def fetch_channel_history(
             if msg.get("subtype"):
                 continue
 
+            text = msg["text"]
+
+            # If this is a thread reply, fetch the parent message for Q&A context
+            if msg.get("thread_ts") and msg["thread_ts"] != msg["ts"]:
+                try:
+                    thread = client.conversations_replies(
+                        channel=channel_id, ts=msg["thread_ts"], limit=1,
+                    )
+                    parent = thread["messages"][0] if thread.get("messages") else None
+                    if parent and parent.get("user") != decision_maker_id and parent.get("text"):
+                        text = f"[질문] {parent['text']}\n[답변] {msg['text']}"
+                except Exception:
+                    # Fall back to standalone message on error
+                    pass
+
+            # Prepend channel name for context (e.g. "[#dev-planning] ...")
+            if channel_name:
+                text = f"[#{channel_name}] {text}"
+
             entry = {
-                "text": msg["text"],
+                "text": text,
                 "channel": channel_id,
                 "ts": msg["ts"],
             }
@@ -161,6 +182,7 @@ def fetch_all_workspace_history(
             channel_id=ch["id"],
             decision_maker_id=decision_maker_id,
             oldest=oldest,
+            channel_name=ch["name"],
         )
         all_messages.extend(msgs)
 
