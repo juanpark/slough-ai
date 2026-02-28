@@ -1,0 +1,221 @@
+name: Deploy to AWS ECS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # 수동 트리거 지원
+
+env:
+  AWS_REGION: ap-northeast-2
+  STACK_NAME: slough-ai
+  ECR_REPOSITORY: slough-ai
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+    if: github.repository == 'juanpark/slough-ai'
+
+    steps:
+      # ---------------------------------------------------------------
+      # 1. 코드 체크아웃
+      # ---------------------------------------------------------------
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------
+      # 2. AWS 자격 증명 설정
+      # ---------------------------------------------------------------
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # ---------------------------------------------------------------
+      # 3. ECR 로그인
+      # ---------------------------------------------------------------
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ---------------------------------------------------------------
+      # 4. Docker 이미지 빌드 & Push (레이어 캐시 사용)
+      # ---------------------------------------------------------------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        id: build-image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Set image URI output
+        id: image
+        run: |
+          echo "uri=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}" >> $GITHUB_OUTPUT
+
+      # ---------------------------------------------------------------
+      # 5. CloudFormation 스택 업데이트 (정확한 에러 핸들링)
+      # ---------------------------------------------------------------
+      - name: Update CloudFormation stack
+        id: cfn-update
+        run: |
+          set +e
+          OUTPUT=$(aws cloudformation update-stack \
+            --stack-name $STACK_NAME \
+            --template-body file://infra/cloudformation.yaml \
+            --capabilities CAPABILITY_IAM \
+            --parameters \
+              ParameterKey=AppImageURI,ParameterValue=${{ steps.image.outputs.uri }} \
+              ParameterKey=DBPassword,UsePreviousValue=true \
+              ParameterKey=SecretArn,UsePreviousValue=true \
+              ParameterKey=CertificateArn,UsePreviousValue=true \
+            2>&1)
+          EXIT_CODE=$?
+          set -e
+
+          if [ $EXIT_CODE -ne 0 ]; then
+            if echo "$OUTPUT" | grep -q "No updates are to be performed"; then
+              echo "ℹ️ CloudFormation: 변경 사항 없음 (스킵)"
+              echo "cfn_changed=false" >> $GITHUB_OUTPUT
+            else
+              echo "❌ CloudFormation 업데이트 실패:"
+              echo "$OUTPUT"
+              exit 1
+            fi
+          else
+            echo "✅ CloudFormation 업데이트 시작됨"
+            echo "cfn_changed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Wait for CloudFormation update
+        if: steps.cfn-update.outputs.cfn_changed == 'true'
+        run: |
+          echo "⏳ CloudFormation 업데이트 대기 중..."
+          aws cloudformation wait stack-update-complete \
+            --stack-name $STACK_NAME
+          echo "✅ CloudFormation 업데이트 완료"
+
+      # ---------------------------------------------------------------
+      # 6. 배포 전 현재 Task Definition 저장 (롤백용)
+      # ---------------------------------------------------------------
+      - name: Save current task definitions for rollback
+        id: pre-deploy
+        run: |
+          CLUSTER="${STACK_NAME}-cluster"
+          for svc in app worker beat; do
+            CURRENT_TD=$(aws ecs describe-services \
+              --cluster $CLUSTER \
+              --services "${STACK_NAME}-${svc}-service" \
+              --query "services[0].taskDefinition" \
+              --output text)
+            echo "${svc}_td=${CURRENT_TD}" >> $GITHUB_OUTPUT
+            echo "📋 ${svc} 현재 TD: ${CURRENT_TD}"
+          done
+
+      # ---------------------------------------------------------------
+      # 7. ECS 서비스 강제 재배포 (새 이미지 적용)
+      # ---------------------------------------------------------------
+      - name: Deploy ECS services
+        run: |
+          CLUSTER="${STACK_NAME}-cluster"
+          for service in "${STACK_NAME}-app-service" "${STACK_NAME}-worker-service" "${STACK_NAME}-beat-service"; do
+            echo "🔄 재배포: $service"
+            aws ecs update-service \
+              --cluster $CLUSTER \
+              --service $service \
+              --force-new-deployment \
+              > /dev/null
+          done
+          echo "✅ 모든 서비스 재배포 트리거 완료"
+
+      # ---------------------------------------------------------------
+      # 8. 전체 서비스 안정화 대기
+      # ---------------------------------------------------------------
+      - name: Wait for all ECS services stable
+        id: wait-stable
+        run: |
+          CLUSTER="${STACK_NAME}-cluster"
+          SERVICES=("${STACK_NAME}-app-service" "${STACK_NAME}-worker-service" "${STACK_NAME}-beat-service")
+
+          for service in "${SERVICES[@]}"; do
+            echo "⏳ ${service} 안정화 대기 중..."
+            if aws ecs wait services-stable \
+              --cluster $CLUSTER \
+              --services "$service"; then
+              echo "✅ ${service} 안정화 완료"
+            else
+              echo "❌ ${service} 안정화 실패!"
+              echo "stable=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+          done
+          echo "stable=true" >> $GITHUB_OUTPUT
+
+      # ---------------------------------------------------------------
+      # 9. 롤백 (안정화 실패 시)
+      # ---------------------------------------------------------------
+      - name: Rollback on failure
+        if: failure() && steps.pre-deploy.outputs.app_td != ''
+        run: |
+          echo "🔙 롤백 시작 — 이전 Task Definition으로 복원"
+          CLUSTER="${STACK_NAME}-cluster"
+
+          aws ecs update-service \
+            --cluster $CLUSTER \
+            --service "${STACK_NAME}-app-service" \
+            --task-definition "${{ steps.pre-deploy.outputs.app_td }}" \
+            --force-new-deployment > /dev/null
+
+          aws ecs update-service \
+            --cluster $CLUSTER \
+            --service "${STACK_NAME}-worker-service" \
+            --task-definition "${{ steps.pre-deploy.outputs.worker_td }}" \
+            --force-new-deployment > /dev/null
+
+          aws ecs update-service \
+            --cluster $CLUSTER \
+            --service "${STACK_NAME}-beat-service" \
+            --task-definition "${{ steps.pre-deploy.outputs.beat_td }}" \
+            --force-new-deployment > /dev/null
+
+          echo "⏳ 롤백 안정화 대기 중..."
+          aws ecs wait services-stable \
+            --cluster $CLUSTER \
+            --services "${STACK_NAME}-app-service"
+          echo "✅ 롤백 완료"
+
+      # ---------------------------------------------------------------
+      # 10. 배포 결과 요약
+      # ---------------------------------------------------------------
+      - name: Deployment summary
+        if: success()
+        run: |
+          echo "## 🚀 배포 완료" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 항목 | 값 |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| **이미지** | \`${{ steps.image.outputs.uri }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **스택** | \`$STACK_NAME\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **리전** | \`$AWS_REGION\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **커밋** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+
+          ALB_DNS=$(aws cloudformation describe-stacks \
+            --stack-name $STACK_NAME \
+            --query 'Stacks[0].Outputs[?OutputKey==`ALBDNSName`].OutputValue' \
+            --output text)
+          echo "| **ALB** | \`$ALB_DNS\` |" >> $GITHUB_STEP_SUMMARY
