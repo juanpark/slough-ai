@@ -4,6 +4,36 @@
 
 의사결정자의 Slack 대화 기록을 학습하여, 팀원들의 질문에 의사결정자의 사고 방식으로 답변하는 B2B SaaS Slack 봇입니다.
 
+- **랜딩 페이지:** https://slough-lp.vercel.app
+- **Slack 앱 설치:** https://dylcsnb4u0bo.cloudfront.net/slack/install
+- **데모 워크스페이스:** https://join.slack.com/t/isfet/shared_invite/zt-3qneskbtv-dHWGw2T0sEged3rSREYiAw
+
+## 빠른 체험 가이드
+
+### 1. 데모 워크스페이스에서 체험하기
+
+이미 설치된 환경에서 바로 체험할 수 있습니다:
+
+1. [데모 Slack 워크스페이스](https://join.slack.com/t/isfet/shared_invite/zt-3qneskbtv-dHWGw2T0sEged3rSREYiAw)에 가입
+2. 앱 목록에서 **Slough.ai** 봇을 찾아 DM 보내기
+3. 질문을 입력하면 의사결정자 스타일의 AI 답변을 받을 수 있습니다
+4. 답변 하단의 "검토 요청" 버튼으로 의사결정자에게 확인을 요청할 수 있습니다
+
+### 2. 내 워크스페이스에 설치하기
+
+1. [설치 링크](https://dylcsnb4u0bo.cloudfront.net/slack/install)를 클릭
+2. Slack OAuth 인증 화면에서 워크스페이스를 선택하고 **허용** 클릭
+3. 온보딩 모달이 표시됩니다:
+   - 학습 대상 의사결정자를 선택
+   - 학습할 채널을 선택
+   - 데이터 수집 동의 체크
+4. 봇이 선택한 채널에서 의사결정자의 메시지를 백그라운드로 학습합니다
+5. 학습 완료 DM을 받으면, 팀원들이 봇에게 DM으로 질문을 보낼 수 있습니다
+
+> **참고:** 반드시 위 설치 링크를 통해 설치해야 합니다. Slack API 사이트의 "Install App" 버튼은 OAuth 플로우를 거치지 않아 정상 동작하지 않습니다.
+
+---
+
 ## 프로젝트 개요
 
 **문제:** 의사결정자에게 반복적인 질문이 몰리고, 답변 대기로 업무가 지연됨
