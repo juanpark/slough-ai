@@ -73,7 +73,7 @@ def _get_llm() -> ChatOpenAI:
     if _llm is None:
         _llm = ChatOpenAI(
             model="gpt-4o",
-            temperature=0.7,
+            temperature=0.3,
             api_key=settings.openai_api_key,
         )
     return _llm
@@ -150,8 +150,8 @@ def retrieve(state: AgentState) -> dict:
         docs = search_similar(
             workspace_id=workspace_id,
             query=question,
-            k=5,
-            threshold=0.5,
+            k=8,
+            threshold=0.3,
         )
         return {
             "context": docs,

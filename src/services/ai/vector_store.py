@@ -17,7 +17,7 @@ def search_similar(
     workspace_id: str,
     query: str,
     k: int = 5,
-    threshold: float = 0.5,
+    threshold: float = 0.3,
 ) -> list[str]:
     """Search for the top-k most similar embeddings with time-weighted scoring.
 
