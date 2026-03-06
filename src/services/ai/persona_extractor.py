@@ -65,7 +65,7 @@ def extract_persona(workspace_id: str) -> str:
     for query in _SAMPLE_QUERIES:
         try:
             results = search_similar(workspace_id=workspace_id, query=query, k=5)
-            for content, _score in results:
+            for content, _score, _date in results:
                 if content not in seen:
                     seen.add(content)
                     all_samples.append(content)

@@ -139,34 +139,94 @@ def check_safety(state: AgentState) -> dict:
     }
 
 
+# ── Query rewriting helper ───────────────────────────────────────────
+
+async def _rewrite_query(question: str) -> list[str]:
+    """Generate 2-3 search-optimized query variants using GPT-4o-mini.
+
+    Expands keywords, converts temporal expressions, and maintains
+    the original meaning to improve retrieval recall.
+
+    Returns the original query plus rewritten variants.
+    """
+    llm = ChatOpenAI(
+        model="gpt-4o-mini",
+        temperature=0,
+        max_tokens=200,
+        api_key=settings.openai_api_key,
+    )
+    prompt = (
+        "당신은 검색 쿼리 최적화 전문가입니다.\n"
+        "아래 질문을 벡터 검색에 최적화된 2-3개의 검색 쿼리로 변환하세요.\n"
+        "규칙:\n"
+        "- 각 쿼리는 한 줄에 하나씩\n"
+        "- 시간 표현('최근', '요즘')은 구체적 키워드로 변환\n"
+        "- 동의어와 관련 키워드를 확장\n"
+        "- 원래 의미를 유지\n"
+        "- 쿼리만 출력 (번호, 설명 없이)\n\n"
+        f"질문: {question}"
+    )
+    try:
+        response = await llm.ainvoke([{"role": "user", "content": prompt}])
+        variants = [
+            line.strip()
+            for line in response.content.strip().split("\n")
+            if line.strip()
+        ]
+        # Always include original query first
+        return [question] + variants[:2]
+    except Exception:
+        logger.warning("Query rewrite failed, using original query only")
+        return [question]
+
+
 # ── Node: retrieve ───────────────────────────────────────────────────
 
-def retrieve(state: AgentState) -> dict:
-    """Retrieve similar documents from pgvector with similarity threshold."""
+async def retrieve(state: AgentState) -> dict:
+    """Retrieve similar documents from pgvector with query rewriting.
+
+    1. Rewrite the question into 2-3 search variants (GPT-4o-mini)
+    2. Run vector search for each variant
+    3. Deduplicate by content, keep highest score per doc
+    4. Annotate with relevance labels and dates
+    """
     workspace_id = state.get("workspace_id", "")
     question = state["question"]
 
     try:
-        results = search_similar(
-            workspace_id=workspace_id,
-            query=question,
-            k=8,
-            threshold=0.3,
-        )
-        # Annotate each doc with relevance level for the LLM
+        queries = await _rewrite_query(question)
+        logger.info("Query rewrite: %d variants for '%s'", len(queries), question[:50])
+
+        # Collect results from all query variants
+        seen: dict[str, tuple[float, str]] = {}  # content -> (best_score, date_str)
+        for q in queries:
+            results = search_similar(
+                workspace_id=workspace_id,
+                query=q,
+                k=8,
+                threshold=0.3,
+            )
+            for content, score, date_str in results:
+                if content not in seen or score > seen[content][0]:
+                    seen[content] = (score, date_str)
+
+        # Sort by score descending, cap at k=8
+        ranked = sorted(seen.items(), key=lambda x: x[1][0], reverse=True)[:8]
+
+        # Annotate each doc with relevance level and date
         annotated = []
-        for content, score in results:
+        for content, (score, date_str) in ranked:
             if score > 0.5:
                 label = "[높은 관련성]"
             elif score >= 0.35:
                 label = "[관련성 있음]"
             else:
                 label = "[낮은 관련성]"
-            annotated.append(f"{label}\n{content}")
+            annotated.append(f"{label} [{date_str}]\n{content}")
 
         return {
             "context": annotated,
-            "sources_used": len(results),
+            "sources_used": len(ranked),
         }
     except Exception:
         logger.exception("Vector search failed")

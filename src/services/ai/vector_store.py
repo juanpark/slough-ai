@@ -18,7 +18,7 @@ def search_similar(
     query: str,
     k: int = 5,
     threshold: float = 0.3,
-) -> list[tuple[str, float]]:
+) -> list[tuple[str, float, str]]:
     """Search for the top-k most similar embeddings with time-weighted scoring.
 
     Combines cosine similarity with a time decay factor so that recent
@@ -33,7 +33,8 @@ def search_similar(
                    threshold are excluded even if they are in the top-k.
 
     Returns:
-        List of (content, final_score) tuples from the most relevant embeddings.
+        List of (content, final_score, date_str) tuples. date_str is
+        formatted as YYYY-MM-DD for temporal awareness in the LLM.
     """
     query_embedding = embed_text(query)
 
@@ -52,12 +53,13 @@ def search_similar(
                         1 - (embedding <=> :query_vec) AS similarity,
                         1.0 / (1.0 + 0.1 * LN(
                             GREATEST(EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0, 0) + 1
-                        )) AS time_weight
+                        )) AS time_weight,
+                        TO_CHAR(created_at, 'YYYY-MM-DD') AS date_str
                     FROM embeddings
                     WHERE workspace_id = :ws_id
                       AND 1 - (embedding <=> :query_vec) > :threshold
                 )
-                SELECT content, similarity, time_weight, similarity * time_weight AS final_score
+                SELECT content, similarity, time_weight, similarity * time_weight AS final_score, date_str
                 FROM scored
                 ORDER BY final_score DESC
                 LIMIT :k
@@ -82,7 +84,7 @@ def search_similar(
     else:
         logger.info("Vector search: 0 results above threshold %.2f", threshold)
 
-    return [(row[0], row[3]) for row in results]  # (content, final_score)
+    return [(row[0], row[3], row[4]) for row in results]  # (content, final_score, date_str)
 
 
 def store_embeddings(
