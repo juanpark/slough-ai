@@ -49,7 +49,7 @@ def register(app):
                     respond(text="⏳ 이미 학습이 진행 중입니다. 완료될 때까지 기다려 주세요.")
                     return
 
-                # Full re-ingest: delete existing embeddings first
+                # Full re-ingest: delete existing embeddings + conversation memory
                 if is_full:
                     from src.services.db.models import Embedding
                     deleted = db.query(Embedding).filter(
@@ -57,6 +57,10 @@ def register(app):
                     ).delete()
                     db.commit()
                     logger.info("Full re-ingest: deleted %d embeddings for workspace %s", deleted, workspace_id)
+
+                    from src.services.ai.memory import clear_checkpoints
+                    cleared = clear_checkpoints(str(workspace_id))
+                    logger.info("Full re-ingest: cleared %d checkpoint rows for workspace %s", cleared, workspace_id)
 
         except Exception:
             logger.exception("DB error during /slough-ingest")
@@ -67,7 +71,7 @@ def register(app):
             respond(
                 text=(
                     "🔄 전체 재학습을 시작합니다!\n"
-                    "기존 학습 데이터를 초기화하고 모든 메시지를 다시 학습합니다.\n"
+                    "기존 학습 데이터와 대화 기록을 초기화하고 모든 메시지를 다시 학습합니다.\n"
                     "완료되면 DM으로 알려드리겠습니다."
                 ),
             )

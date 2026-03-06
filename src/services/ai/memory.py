@@ -12,6 +12,8 @@ of tokens regardless of conversation length.
 import logging
 from contextlib import asynccontextmanager
 
+from sqlalchemy import text
+
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -68,6 +70,37 @@ async def get_checkpointer():
         saver = AsyncPostgresSaver(pool)
         await saver.setup()
         yield saver
+
+
+def clear_checkpoints(workspace_id: str) -> int:
+    """Delete all LangGraph checkpoints for a workspace.
+
+    Thread IDs are formatted as ``{workspace_id}:{asker_id}``, so we delete
+    all rows where thread_id starts with the workspace prefix.
+
+    Returns the total number of rows deleted across checkpoint tables.
+    """
+    from src.services.db.connection import get_db
+
+    prefix = f"{workspace_id}:%"
+    deleted = 0
+
+    with get_db() as db:
+        for table in ("checkpoints", "checkpoint_writes", "checkpoint_blobs"):
+            try:
+                result = db.execute(
+                    text(f"DELETE FROM {table} WHERE thread_id LIKE :prefix"),
+                    {"prefix": prefix},
+                )
+                deleted += result.rowcount
+            except Exception:
+                # Table may not exist yet if no checkpoints were ever created
+                logger.debug("Table %s not found or empty, skipping", table)
+
+    logger.info(
+        "Cleared %d checkpoint rows for workspace %s", deleted, workspace_id,
+    )
+    return deleted
 
 
 # ── Layer 2: Summary Memory (compress old messages) ───────────────────
