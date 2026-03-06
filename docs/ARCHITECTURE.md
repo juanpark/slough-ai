@@ -111,9 +111,10 @@ Employee sends DM
          │
          ▼
 ┌─────────────────┐
-│   retrieve      │──── pgvector search (threshold=0.5)
-│                 │     + time-weighted scoring
-│                 │     + cosine similarity
+│   retrieve      │──── Query rewriting (GPT-4o-mini, 2-3 variants)
+│                 │     + Multi-query pgvector search
+│                 │     + Dedup & rank (top-k=8, threshold=0.3)
+│                 │     + Annotate: relevance labels + date tags
 └────────┬────────┘
          │
          ▼
@@ -122,8 +123,11 @@ Employee sends DM
 │                 │     1. CEO name + self-identity rules
 │                 │     2. Persona profile (from Redis)
 │                 │     3. Rules (from DB)
-│                 │     4. Retrieved context (from pgvector)
-│                 │     5. 3-layer memory (trim + summarize)
+│                 │     4-6. Meta-Q, continuity, behavior rules
+│                 │     7. Answer priority
+│                 │     8. Retrieved context + dates (near end)
+│                 │     9. Grounding + citation rules (very end)
+│                 │     + 3-layer memory (trim + summarize)
 │                 │     → GPT-4o generation
 └────────┬────────┘
          │
@@ -268,21 +272,34 @@ User Question
      │
      ▼
 ┌──────────────┐
+│Query Rewrite │ ─── GPT-4o-mini generates 2-3 search variants
+│ (GPT-4o-mini)│     (keyword expansion, temporal conversion)
+└──────┬───────┘
+       │
+       ▼ (for each variant)
+┌──────────────┐
 │ Embed Query  │ ─── text-embedding-3-small
 └──────┬───────┘
        │
        ▼
 ┌──────────────┐
-│ Vector Search│ ─── Top-5 similar chunks
-│  (pgvector)  │ ─── Cosine similarity > 0.5 threshold
-│              │ ─── Time-weighted scoring:
+│ Vector Search│ ─── Cosine similarity > 0.3 threshold
+│  (pgvector)  │ ─── Time-weighted scoring:
 │              │     score = similarity * (1/(1+0.1*ln(age+1)))
+│              │ ─── Returns: (content, score, date_str)
 └──────┬───────┘
        │
        ▼
 ┌──────────────┐
-│ Build Context│ ─── Combine retrieved chunks
-│              │ ─── Add to persona prompt
+│  Dedup &     │ ─── Merge results from all variants
+│  Rank        │ ─── Keep highest score per doc, cap at k=8
+└──────┬───────┘
+       │
+       ▼
+┌──────────────┐
+│  Annotate    │ ─── [높은 관련성/관련성 있음/낮은 관련성] labels
+│              │ ─── [YYYY-MM-DD] date tags
+│              │ ─── Placed near end of system prompt
 └──────────────┘
 ```
 
