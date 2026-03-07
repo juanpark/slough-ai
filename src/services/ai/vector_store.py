@@ -2,6 +2,7 @@
 
 import logging
 import uuid as uuid_mod
+from datetime import datetime, timezone
 
 from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Session
@@ -112,6 +113,19 @@ def store_embeddings(
 
     with get_db() as db:
         for chunk, vector in zip(chunks, vectors):
+            # Use original Slack message timestamp for created_at
+            # so time-weighted scoring reflects actual message date,
+            # not ingestion date.
+            msg_ts = chunk.get("message_ts", "")
+            created_at = None
+            if msg_ts:
+                try:
+                    created_at = datetime.fromtimestamp(
+                        float(msg_ts), tz=timezone.utc,
+                    )
+                except (ValueError, OSError):
+                    pass  # fall back to server default (NOW())
+
             record = Embedding(
                 workspace_id=ws_uuid,
                 content=chunk["content"],
@@ -120,6 +134,8 @@ def store_embeddings(
                 message_ts=chunk.get("message_ts"),
                 thread_ts=chunk.get("thread_ts"),
             )
+            if created_at is not None:
+                record.created_at = created_at
             db.add(record)
             stored += 1
         db.flush()
